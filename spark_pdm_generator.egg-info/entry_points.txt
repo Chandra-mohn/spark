@@ -1,2 +1,0 @@
-[console_scripts]
-spark-pdm = spark_pdm_generator.cli:app

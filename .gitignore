@@ -1,0 +1,179 @@
+# ============================================
+# Nexflow Toolchain .gitignore
+# Python + Java + ANTLR project
+# ============================================
+
+# --------------------------------------------
+# Python
+# --------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# --------------------------------------------
+# Java / Maven / Gradle
+# --------------------------------------------
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+hs_err_pid*
+
+# Maven
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# --------------------------------------------
+# ANTLR
+# --------------------------------------------
+*.interp
+*.tokens
+.antlr/
+
+# --------------------------------------------
+# IDE / Editors
+# --------------------------------------------
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# PyCharm
+.idea/
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+.#*
+
+# --------------------------------------------
+# OS Generated
+# --------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --------------------------------------------
+# Node.js / npm
+# --------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn
+
+# --------------------------------------------
+# Build artifacts (binaries)
+# --------------------------------------------
+*.vsix
+*.exe
+plugin/out/
+plugin/bin/
+webview/dist/
+
+# --------------------------------------------
+# Project Specific
+# --------------------------------------------
+# Generated code (can be regenerated)
+generated/
+
+# Serena MCP state
+.serena/
+
+# Local configuration overrides
+*.local.toml
+*.local.yaml
+*.local.json
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Secrets and credentials (NEVER commit these)
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+credentials/
+
+# Claude docs (analysis reports, not source code)
+claudedocs/
+
+# Test output
+test-output/
+test-results/
+test_project/
