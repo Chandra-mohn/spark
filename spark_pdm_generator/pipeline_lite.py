@@ -3,7 +3,7 @@
 Orchestrates: LiteParser -> Estimate Record Lengths -> Build Graph ->
 Classify -> Fill Missing Row Counts -> Denormalize -> Partition ->
 Bucket -> Sort -> Type Map -> Physical Rels -> Overrides -> Spark Config ->
-Emit (Excel + DDL only, no ETL, no Iceberg).
+Emit (Excel + DDL + ETL).
 
 Designed to be disposable -- switch to the full pipeline when comprehensive
 input data becomes available.
@@ -12,6 +12,7 @@ input data becomes available.
 from pathlib import Path
 
 from spark_pdm_generator.emitters.ddl_builder import emit_ddl_files
+from spark_pdm_generator.emitters.etl_builder import emit_etl_files
 from spark_pdm_generator.emitters.excel_emitter import emit_excel
 from spark_pdm_generator.engine.classifier import classify_entities, validate_classifications
 from spark_pdm_generator.engine.denormalizer import (
@@ -33,7 +34,7 @@ from spark_pdm_generator.engine.overrides import apply_remaining_overrides
 from spark_pdm_generator.engine.partitioner import select_partition_columns
 from spark_pdm_generator.engine.utils import OverrideRegistry
 from spark_pdm_generator.models.graph import ERGraph
-from spark_pdm_generator.models.logical import LogicalModel
+from spark_pdm_generator.models.logical import LogicalModel, TargetFormat
 from spark_pdm_generator.models.physical import PhysicalModel
 
 
@@ -58,7 +59,7 @@ def run_lite_pipeline(
     9.  Build physical relationships
     10. Apply remaining overrides
     11. Generate Spark config
-    12. Emit outputs (Excel + Parquet DDL only)
+    12. Emit outputs (Excel + DDL + ETL)
 
     Args:
         model: Parsed logical model from LiteParser.
@@ -114,9 +115,15 @@ def run_lite_pipeline(
     # Phase 11: Generate Spark config
     generate_spark_config(model, output)
 
-    # Phase 12: Emit outputs -- Excel + Parquet DDL only (no ETL, no Iceberg)
+    # Phase 12: Emit outputs
     output_dir.mkdir(parents=True, exist_ok=True)
     emit_excel(output, output_excel_path)
-    emit_ddl_files(output, output_dir, include_iceberg=False)
+
+    include_iceberg = model.config.target_format in (
+        TargetFormat.ICEBERG,
+        TargetFormat.BOTH,
+    )
+    emit_ddl_files(output, output_dir, include_iceberg=include_iceberg)
+    emit_etl_files(output, output_dir, logical_model=model)
 
     return output

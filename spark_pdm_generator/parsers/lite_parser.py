@@ -18,11 +18,14 @@ from openpyxl.worksheet.worksheet import Worksheet
 from spark_pdm_generator.models.logical import (
     Attribute,
     Cardinality,
+    Compression,
     Config,
     DenormalizationMode,
     Entity,
     LogicalModel,
+    ModelType,
     Relationship,
+    TargetFormat,
 )
 
 
@@ -86,6 +89,7 @@ class LiteParser:
             entities = self._parse_entities(wb)
             attributes = self._parse_attributes(wb)
             relationships = self._parse_relationships(wb, attributes)
+            config = self._parse_config(wb)
         finally:
             wb.close()
 
@@ -93,11 +97,6 @@ class LiteParser:
             raise LiteParseError(
                 "Parsing errors:\n" + "\n".join(f"  - {e}" for e in self.errors)
             )
-
-        config = Config(
-            denormalization_mode=DenormalizationMode.AUTO,
-            target_format="PARQUET",
-        )
 
         return LogicalModel(
             entities=entities,
@@ -282,6 +281,30 @@ class LiteParser:
         return relationships
 
     # ------------------------------------------------------------------
+    # Config parsing
+    # ------------------------------------------------------------------
+
+    def _parse_config(self, wb: openpyxl.Workbook) -> Config:
+        """Parse the optional config sheet (key-value pairs).
+
+        Falls back to lite defaults if no config sheet is present.
+        """
+        ws = self._get_sheet(wb, "config", required=False)
+        if not ws:
+            return Config()
+
+        rows = self._read_sheet_rows(ws)
+        config_dict: dict[str, Any] = {}
+
+        for row in rows:
+            key = _str(row.get("key") or row.get("config_key"))
+            value = row.get("value") or row.get("config_value")
+            if key and value is not None:
+                config_dict[key] = value
+
+        return _build_config_from_dict(config_dict)
+
+    # ------------------------------------------------------------------
     # Low-level helpers
     # ------------------------------------------------------------------
 
@@ -403,3 +426,51 @@ def _extract_attr_from_join_part(part: str) -> str:
     attr_display_name = part[dot_pos + 1:].strip()
     # Convert display name to code format: uppercase, spaces -> underscores
     return attr_display_name.upper().replace(" ", "_")
+
+
+def _parse_enum(value: Any, enum_class: type, default: Any) -> Any:
+    """Parse a value into an enum, falling back to default."""
+    if value is None:
+        return default
+    str_val = str(value).strip().upper()
+    try:
+        return enum_class(str_val)
+    except ValueError:
+        for member in enum_class:
+            if member.name == str_val or member.value == str_val:
+                return member
+        return default
+
+
+def _build_config_from_dict(d: dict[str, Any]) -> Config:
+    """Build a Config from a key-value dict, applying type coercion."""
+    kwargs: dict[str, Any] = {}
+
+    str_enum_fields = {
+        "model_type": ModelType,
+        "target_format": TargetFormat,
+        "compression": Compression,
+        "denormalization_mode": DenormalizationMode,
+    }
+    int_fields = [
+        "cluster_parallelism",
+        "target_file_size_mb",
+        "column_threshold_for_vertical_split",
+        "small_dim_row_threshold",
+        "dictionary_encoding_cardinality_threshold",
+        "max_partition_cardinality",
+        "row_group_size_mb",
+        "default_bucket_count",
+    ]
+
+    for key, enum_class in str_enum_fields.items():
+        if key in d:
+            kwargs[key] = _parse_enum(d[key], enum_class, None)
+
+    for key in int_fields:
+        if key in d:
+            val = _parse_int(d[key])
+            if val is not None:
+                kwargs[key] = val
+
+    return Config(**{k: v for k, v in kwargs.items() if v is not None})

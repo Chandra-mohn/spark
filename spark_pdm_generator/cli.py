@@ -81,6 +81,21 @@ def generate(
     typer.echo(f"  Query patterns:{len(model.query_patterns)}")
     typer.echo(f"  Overrides:     {len(model.rule_overrides)}")
 
+    # Show active config
+    cfg = model.config
+    typer.echo(f"\n  Active configuration:")
+    typer.echo(f"    target_format:                        {cfg.target_format.value}")
+    typer.echo(f"    denormalization_mode:                  {cfg.denormalization_mode.value}")
+    typer.echo(f"    compression:                          {cfg.compression.value}")
+    typer.echo(f"    cluster_parallelism:                  {cfg.cluster_parallelism}")
+    typer.echo(f"    target_file_size_mb:                  {cfg.target_file_size_mb}")
+    typer.echo(f"    column_threshold_for_vertical_split:  {cfg.column_threshold_for_vertical_split}")
+    typer.echo(f"    small_dim_row_threshold:              {cfg.small_dim_row_threshold}")
+    typer.echo(f"    row_group_size_mb:                    {cfg.row_group_size_mb}")
+    typer.echo(f"    default_bucket_count:                 {cfg.default_bucket_count}")
+    typer.echo(f"    max_partition_cardinality:            {cfg.max_partition_cardinality}")
+    typer.echo(f"    dictionary_encoding_cardinality_threshold: {cfg.dictionary_encoding_cardinality_threshold}")
+
     # Run pipeline
     typer.echo("\nRunning transformation pipeline...")
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -145,6 +160,21 @@ def generate_lite(
     typer.echo(f"  Attributes:    {len(model.attributes)}")
     typer.echo(f"  Relationships: {len(model.relationships)}")
 
+    # Show active config
+    cfg = model.config
+    typer.echo(f"\n  Active configuration:")
+    typer.echo(f"    target_format:                        {cfg.target_format.value}")
+    typer.echo(f"    denormalization_mode:                  {cfg.denormalization_mode.value}")
+    typer.echo(f"    compression:                          {cfg.compression.value}")
+    typer.echo(f"    cluster_parallelism:                  {cfg.cluster_parallelism}")
+    typer.echo(f"    target_file_size_mb:                  {cfg.target_file_size_mb}")
+    typer.echo(f"    column_threshold_for_vertical_split:  {cfg.column_threshold_for_vertical_split}")
+    typer.echo(f"    small_dim_row_threshold:              {cfg.small_dim_row_threshold}")
+    typer.echo(f"    row_group_size_mb:                    {cfg.row_group_size_mb}")
+    typer.echo(f"    default_bucket_count:                 {cfg.default_bucket_count}")
+    typer.echo(f"    max_partition_cardinality:            {cfg.max_partition_cardinality}")
+    typer.echo(f"    dictionary_encoding_cardinality_threshold: {cfg.dictionary_encoding_cardinality_threshold}")
+
     # Run lite pipeline
     typer.echo("\nRunning lite transformation pipeline...")
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -159,8 +189,10 @@ def generate_lite(
     typer.echo(f"  Warnings:               {len(result.warnings)}")
 
     typer.echo(f"\nOutput written to:")
-    typer.echo(f"  Excel: {output_file}")
-    typer.echo(f"  DDL:   {output_dir}/ddl/")
+    typer.echo(f"  Excel:   {output_file}")
+    typer.echo(f"  DDL:     {output_dir}/ddl/")
+    typer.echo(f"  ETL SQL: {output_dir}/etl/sql/")
+    typer.echo(f"  ETL Py:  {output_dir}/etl/pyspark/")
 
 
 @app.command("inspect")
