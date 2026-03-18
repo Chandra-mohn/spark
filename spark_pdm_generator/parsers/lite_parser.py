@@ -22,6 +22,7 @@ from spark_pdm_generator.models.logical import (
     Config,
     DenormalizationMode,
     Entity,
+    EntityType,
     LogicalModel,
     ModelType,
     Relationship,
@@ -87,11 +88,24 @@ class LiteParser:
 
         try:
             entities = self._parse_entities(wb)
+            # Build canonical name map for cross-sheet normalization
+            self._entity_name_map = _build_name_map(
+                [e.entity_name for e in entities]
+            )
             attributes = self._parse_attributes(wb)
             relationships = self._parse_relationships(wb, attributes)
             config = self._parse_config(wb)
         finally:
             wb.close()
+
+        # Validate: warn about entities with zero attributes
+        entity_names = {e.entity_name for e in entities}
+        attr_entities = {a.entity_name for a in attributes}
+        for name in sorted(entity_names - attr_entities):
+            self.warnings.append(
+                f"Entity '{name}' has 0 attributes -- check EntityName "
+                f"spelling between Entities and Attributes sheets"
+            )
 
         if self.errors:
             raise LiteParseError(
@@ -110,7 +124,10 @@ class LiteParser:
     # ------------------------------------------------------------------
 
     def _parse_entities(self, wb: openpyxl.Workbook) -> list[Entity]:
-        """Parse the Entities sheet."""
+        """Parse the Entities sheet.
+
+        Entity names are stripped of leading/trailing whitespace.
+        """
         ws = self._get_sheet(wb, "Entities", required=True)
         if not ws:
             return []
@@ -119,14 +136,27 @@ class LiteParser:
         entities = []
 
         for i, row in enumerate(rows, start=2):
-            entity_name = _str(row.get("EntityName"))
+            entity_name = _str(row.get("EntityName")).strip()
             if not entity_name:
                 continue
 
             row_count = _parse_int(row.get("RowCount"))
 
+            # Parse optional EntityType override
+            raw_type = _str(row.get("EntityType")).strip().upper()
+            entity_type = EntityType.UNKNOWN
+            if raw_type:
+                try:
+                    entity_type = EntityType(raw_type)
+                except ValueError:
+                    self.warnings.append(
+                        f"Entities row {i}: unknown EntityType '{raw_type}' "
+                        f"for '{entity_name}', will auto-classify"
+                    )
+
             entity = Entity(
                 entity_name=entity_name,
+                entity_type=entity_type,
                 description=_str(row.get("Comment", "")),
                 estimated_row_count=row_count,
                 domain=_str(row.get("CollectionName", "general")) or "general",
@@ -152,13 +182,23 @@ class LiteParser:
         attributes = []
 
         for i, row in enumerate(rows, start=2):
-            entity_name = _str(row.get("EntityName"))
+            raw_entity_name = _str(row.get("EntityName")).strip()
             attr_code = _str(row.get("Code"))
             raw_datatype = _str(row.get("Datatype", "")).strip().upper()
             length = _parse_int(row.get("Length"))
 
-            if not entity_name or not attr_code:
+            if not raw_entity_name or not attr_code:
                 continue
+
+            # Normalize entity name to match Entities sheet
+            entity_name = self._entity_name_map.get(
+                raw_entity_name.lower(), raw_entity_name
+            )
+            if entity_name != raw_entity_name:
+                self.warnings.append(
+                    f"Attributes row {i}: normalized EntityName "
+                    f"'{raw_entity_name}' -> '{entity_name}'"
+                )
 
             if not raw_datatype:
                 self.warnings.append(
@@ -198,7 +238,10 @@ class LiteParser:
             is_pk = _str(row.get("PrimaryIdentifierFlag", "")).strip().upper() == "Y"
             is_fk = _str(row.get("ForeignIdentifierFlag", "")).strip().upper() == "Y"
             nullable = _str(row.get("MandatoryFlag", "")).strip().upper() != "Y"
-            fk_parent = _str(row.get("ForeignIdentifierParentEntityName"))
+            raw_fk_parent = _str(row.get("ForeignIdentifierParentEntityName")).strip()
+            fk_parent = self._entity_name_map.get(
+                raw_fk_parent.lower(), raw_fk_parent
+            ) if raw_fk_parent else ""
 
             attribute = Attribute(
                 entity_name=entity_name,
@@ -240,14 +283,22 @@ class LiteParser:
         relationships = []
 
         for i, row in enumerate(rows, start=2):
-            parent_entity = _str(row.get("ParentEntity"))
-            child_entity = _str(row.get("ChildEntity"))
+            raw_parent = _str(row.get("ParentEntity")).strip()
+            raw_child = _str(row.get("ChildEntity")).strip()
             rel_type = _str(row.get("RelationshipType", "1:n")).strip()
             join_attrs = _str(row.get("JoinAttributes", ""))
             stereotype = _str(row.get("Stereotype", "")).strip().lower()
 
-            if not parent_entity or not child_entity:
+            if not raw_parent or not raw_child:
                 continue
+
+            # Normalize entity names to match Entities sheet
+            parent_entity = self._entity_name_map.get(
+                raw_parent.lower(), raw_parent
+            )
+            child_entity = self._entity_name_map.get(
+                raw_child.lower(), raw_child
+            )
 
             # Parse cardinality
             cardinality = _parse_cardinality(rel_type)
@@ -443,6 +494,16 @@ def _extract_attr_from_join_part(part: str) -> str:
     attr_display_name = part[dot_pos + 1:].strip()
     # Convert display name to code format: uppercase, spaces -> underscores
     return attr_display_name.upper().replace(" ", "_")
+
+
+def _build_name_map(canonical_names: list[str]) -> dict[str, str]:
+    """Build a lowercase -> canonical name lookup for cross-sheet matching.
+
+    Given the entity names from the Entities sheet (the source of truth),
+    creates a dict mapping lowercased names to their original form.
+    This allows case-insensitive matching from Attributes and Relationships.
+    """
+    return {name.lower(): name for name in canonical_names}
 
 
 def _parse_enum(value: Any, enum_class: type, default: Any) -> Any:
