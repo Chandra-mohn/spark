@@ -297,10 +297,27 @@ class LiteParser:
         config_dict: dict[str, Any] = {}
 
         for row in rows:
-            key = _str(row.get("key") or row.get("config_key"))
-            value = row.get("value") or row.get("config_value")
+            # Normalize header keys to lowercase for case-insensitive matching
+            lc_row = {str(k).lower(): v for k, v in row.items()}
+            key = _str(lc_row.get("key") or lc_row.get("config_key"))
+            value = lc_row.get("value") or lc_row.get("config_value")
             if key and value is not None:
-                config_dict[key] = value
+                config_dict[key.strip()] = value
+            elif key:
+                self.warnings.append(
+                    f"Config key '{key}' has no value -- skipped"
+                )
+
+        if config_dict:
+            self.warnings.append(
+                f"Config sheet: read {len(config_dict)} settings: "
+                + ", ".join(f"{k}={v}" for k, v in config_dict.items())
+            )
+        else:
+            self.warnings.append(
+                "Config sheet found but no valid key-value pairs read. "
+                "Expected headers: 'key' and 'value'"
+            )
 
         return _build_config_from_dict(config_dict)
 
