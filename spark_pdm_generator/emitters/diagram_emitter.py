@@ -38,7 +38,9 @@ ARROW_COLOR = "#333333"
 ABSORBED_ARROW_COLOR = "#999999"
 BACKGROUND_COLOR = "#FAFAFA"
 GRID_SPACING_X = 440
-GRID_SPACING_Y = 60
+GRID_SPACING_Y = 100  # increased gap for edge routing channels
+EDGE_CHANNEL_MARGIN = 20  # min distance from box edge for routed edges
+EDGE_OFFSET_STEP = 12  # horizontal offset between parallel edges in same channel
 
 
 def emit_diagram(
@@ -81,19 +83,32 @@ def emit_diagram(
         canvas_w, domain_name, denormalization_mode, entity_infos, output,
     ))
 
-    # Draw edges first (behind boxes)
+    # Draw edges first (behind boxes) using orthogonal routing
+    # Group edges by channel (gap between rows) to offset parallel edges
+    channel_counts: dict[tuple[int, int], int] = {}  # (y_top, y_bot) -> count
+    edge_data = []
     for rel in output.physical_relationships:
         parent_pos = positions.get(rel.parent_physical_entity)
         child_pos = positions.get(rel.child_physical_entity)
         if parent_pos and child_pos:
             label = ", ".join(rel.join_columns) if rel.join_columns else ""
             join_info = rel.join_type.value.replace("_", " ").title()
-            parts.append(_svg_edge(
-                parent_pos, child_pos,
-                label=label,
-                sublabel=join_info,
-                dashed=False,
-            ))
+            # Determine channel: gap between parent bottom and child top
+            p_bot = parent_pos["y"] + parent_pos["height"]
+            c_top = child_pos["y"]
+            channel_key = (min(p_bot, c_top), max(p_bot, c_top))
+            idx = channel_counts.get(channel_key, 0)
+            channel_counts[channel_key] = idx + 1
+            edge_data.append((parent_pos, child_pos, label, join_info, idx))
+
+    for parent_pos, child_pos, label, join_info, edge_idx in edge_data:
+        parts.append(_svg_edge_orthogonal(
+            parent_pos, child_pos, positions,
+            label=label,
+            sublabel=join_info,
+            dashed=False,
+            edge_index=edge_idx,
+        ))
 
     # Draw absorbed-entity ghost edges
     for name, info in entity_infos.items():
@@ -543,50 +558,87 @@ def _svg_entity_box(x: int, y: int, info: dict) -> str:
     return "\n".join(parts)
 
 
-def _svg_edge(
+def _svg_edge_orthogonal(
     parent_pos: dict,
     child_pos: dict,
+    all_positions: dict,
     label: str = "",
     sublabel: str = "",
     dashed: bool = False,
+    edge_index: int = 0,
 ) -> str:
-    """Draw an arrow between two entity boxes."""
-    # Connect from parent box bottom-center to child box top-center
-    x1 = parent_pos["x"] + BOX_WIDTH // 2
-    y1 = parent_pos["y"] + parent_pos["height"]
-    x2 = child_pos["x"] + BOX_WIDTH // 2
-    y2 = child_pos["y"]
+    """Draw an orthogonal (right-angle) arrow between two entity boxes.
 
-    # If boxes are on the same row, connect side-to-side
-    if abs(y1 - parent_pos["height"] - y2 + child_pos["height"]) < GRID_SPACING_Y:
-        if parent_pos["x"] < child_pos["x"]:
-            x1 = parent_pos["x"] + BOX_WIDTH
-            y1 = parent_pos["y"] + parent_pos["height"] // 2
-            x2 = child_pos["x"]
-            y2 = child_pos["y"] + child_pos["height"] // 2
-        else:
-            x1 = parent_pos["x"]
-            y1 = parent_pos["y"] + parent_pos["height"] // 2
-            x2 = child_pos["x"] + BOX_WIDTH
-            y2 = child_pos["y"] + child_pos["height"] // 2
-
+    Routes edges through the gaps between rows so they never cross
+    through entity boxes.
+    """
     color = ABSORBED_ARROW_COLOR if dashed else ARROW_COLOR
     dash = ' stroke-dasharray="6,4"' if dashed else ""
     marker = "arrowhead-absorbed" if dashed else "arrowhead"
 
+    # Horizontal offset for parallel edges in the same channel
+    h_offset = edge_index * EDGE_OFFSET_STEP
+
+    p_top = parent_pos["y"]
+    p_bot = parent_pos["y"] + parent_pos["height"]
+    p_cx = parent_pos["x"] + BOX_WIDTH // 2
+    p_left = parent_pos["x"]
+    p_right = parent_pos["x"] + BOX_WIDTH
+
+    c_top = child_pos["y"]
+    c_bot = child_pos["y"] + child_pos["height"]
+    c_cx = child_pos["x"] + BOX_WIDTH // 2
+    c_left = child_pos["x"]
+    c_right = child_pos["x"] + BOX_WIDTH
+
+    same_row = abs(p_top - c_top) < GRID_SPACING_Y // 2
+
+    if same_row:
+        # Same-row connection: route around via top or bottom
+        waypoints = _route_same_row(
+            parent_pos, child_pos, all_positions, h_offset,
+        )
+    elif p_top < c_top:
+        # Parent is above child: exit bottom, route through gap, enter top
+        mid_y = p_bot + (c_top - p_bot) // 2 + h_offset
+        exit_x = p_cx + h_offset
+        enter_x = c_cx + h_offset
+        waypoints = [
+            (exit_x, p_bot),      # exit parent bottom
+            (exit_x, mid_y),      # down to channel
+            (enter_x, mid_y),     # across to child alignment
+            (enter_x, c_top),     # up to child top
+        ]
+    else:
+        # Parent is below child: exit top, route through gap, enter bottom
+        mid_y = c_bot + (p_top - c_bot) // 2 + h_offset
+        exit_x = p_cx + h_offset
+        enter_x = c_cx + h_offset
+        waypoints = [
+            (exit_x, p_top),      # exit parent top
+            (exit_x, mid_y),      # up to channel
+            (enter_x, mid_y),     # across to child alignment
+            (enter_x, c_bot),     # down to child bottom
+        ]
+
+    # Build SVG path from waypoints
+    path_d = f"M {waypoints[0][0]} {waypoints[0][1]}"
+    for wx, wy in waypoints[1:]:
+        path_d += f" L {wx} {wy}"
+
     parts = [
-        f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
+        f'<path d="{path_d}" fill="none" '
         f'stroke="{color}" stroke-width="1.5"{dash} '
         f'marker-end="url(#{marker})"/>'
     ]
 
-    # Label at midpoint
-    if label:
-        mx = (x1 + x2) // 2
-        my = (y1 + y2) // 2
+    # Label at the horizontal segment midpoint
+    if label and len(waypoints) >= 3:
+        # Find the horizontal segment (where y is constant between two points)
+        mx, my = _find_label_position(waypoints)
         parts.append(
             f'<rect x="{mx - 4}" y="{my - 12}" width="{len(label) * 7 + 8}" '
-            f'height="16" fill="white" opacity="0.85" rx="3"/>'
+            f'height="16" fill="white" opacity="0.9" rx="3"/>'
         )
         parts.append(
             f'<text x="{mx}" y="{my}" font-size="10" fill="{color}">'
@@ -599,3 +651,59 @@ def _svg_edge(
             )
 
     return "\n".join(parts)
+
+
+def _route_same_row(
+    parent_pos: dict,
+    child_pos: dict,
+    all_positions: dict,
+    h_offset: int,
+) -> list[tuple[int, int]]:
+    """Route an edge between two entities on the same row.
+
+    Goes out the nearest side, then vertically above/below to clear
+    all boxes, then horizontally, then back down/up into the target.
+    """
+    p_left = parent_pos["x"]
+    p_right = parent_pos["x"] + BOX_WIDTH
+    p_mid_y = parent_pos["y"] + parent_pos["height"] // 2
+    c_left = child_pos["x"]
+    c_right = child_pos["x"] + BOX_WIDTH
+    c_mid_y = child_pos["y"] + child_pos["height"] // 2
+
+    # Route above the row: use the minimum y of both boxes minus margin
+    route_y = min(parent_pos["y"], child_pos["y"]) - EDGE_CHANNEL_MARGIN - abs(h_offset)
+
+    if parent_pos["x"] < child_pos["x"]:
+        # Parent is left of child -- go out right side, around top, in left side
+        return [
+            (p_right, p_mid_y),
+            (p_right + EDGE_CHANNEL_MARGIN, p_mid_y),
+            (p_right + EDGE_CHANNEL_MARGIN, route_y),
+            (c_left - EDGE_CHANNEL_MARGIN, route_y),
+            (c_left - EDGE_CHANNEL_MARGIN, c_mid_y),
+            (c_left, c_mid_y),
+        ]
+    else:
+        # Parent is right of child
+        return [
+            (p_left, p_mid_y),
+            (p_left - EDGE_CHANNEL_MARGIN, p_mid_y),
+            (p_left - EDGE_CHANNEL_MARGIN, route_y),
+            (c_right + EDGE_CHANNEL_MARGIN, route_y),
+            (c_right + EDGE_CHANNEL_MARGIN, c_mid_y),
+            (c_right, c_mid_y),
+        ]
+
+
+def _find_label_position(waypoints: list[tuple[int, int]]) -> tuple[int, int]:
+    """Find a good position for an edge label on the horizontal segment."""
+    # Look for horizontal segments (same y between consecutive points)
+    for i in range(len(waypoints) - 1):
+        x1, y1 = waypoints[i]
+        x2, y2 = waypoints[i + 1]
+        if y1 == y2 and x1 != x2:
+            return ((x1 + x2) // 2, y1 - 4)
+    # Fallback: midpoint of the whole path
+    mid_idx = len(waypoints) // 2
+    return (waypoints[mid_idx][0], waypoints[mid_idx][1] - 4)
