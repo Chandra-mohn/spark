@@ -38,9 +38,8 @@ ARROW_COLOR = "#333333"
 ABSORBED_ARROW_COLOR = "#999999"
 BACKGROUND_COLOR = "#FAFAFA"
 GRID_SPACING_X = 440
-GRID_SPACING_Y = 80  # gap between rows for edge routing channels
+GRID_SPACING_Y = 60  # gap between rows for edge routing channels
 PORT_PADDING = 30  # min distance from box corner for port placement
-CHANNEL_STEP = 16  # vertical spacing between parallel horizontal segments
 
 
 def emit_diagram(
@@ -60,8 +59,8 @@ def emit_diagram(
     # Build entity info dicts with computed stats
     entity_infos = _build_entity_infos(output)
 
-    # Layout entities on a grid (facts center, dims around)
-    positions = _compute_layout(entity_infos)
+    # Layout entities using graph-aware placement (most connected in center)
+    positions = _compute_layout(entity_infos, output.physical_relationships)
 
     # Compute SVG canvas size
     if not positions:
@@ -102,6 +101,28 @@ def emit_diagram(
     # Assign ports: for each box side, spread connection points evenly
     port_assignments = _assign_ports(edges)
 
+    # Group edges by channel to stagger horizontal segments
+    # Channel = (exit_y, enter_y) for bottom-top edges
+    channel_counters: dict[tuple[int, int], int] = {}
+    edge_channel_indices: list[int] = []
+    edge_channel_totals: list[int] = []
+
+    # First pass: count edges per channel
+    channel_count_map: dict[tuple[int, int], int] = {}
+    for i in range(len(edges)):
+        exit_x, exit_y, enter_x, enter_y, side_pair = port_assignments[i]
+        channel_key = (min(exit_y, enter_y), max(exit_y, enter_y))
+        channel_count_map[channel_key] = channel_count_map.get(channel_key, 0) + 1
+
+    # Second pass: assign stagger index per edge
+    for i in range(len(edges)):
+        exit_x, exit_y, enter_x, enter_y, side_pair = port_assignments[i]
+        channel_key = (min(exit_y, enter_y), max(exit_y, enter_y))
+        idx = channel_counters.get(channel_key, 0)
+        channel_counters[channel_key] = idx + 1
+        edge_channel_indices.append(idx)
+        edge_channel_totals.append(channel_count_map[channel_key])
+
     # Draw edges on top of boxes with orthogonal routing
     for i, (parent_pos, child_pos, label, join_info) in enumerate(edges):
         exit_x, exit_y, enter_x, enter_y, side_pair = port_assignments[i]
@@ -110,7 +131,8 @@ def emit_diagram(
             side_pair=side_pair,
             label=label,
             sublabel=join_info,
-            edge_index=i,
+            channel_index=edge_channel_indices[i],
+            channel_total=edge_channel_totals[i],
         ))
 
     # Footer
@@ -199,24 +221,88 @@ def _build_entity_infos(output: PhysicalModel) -> dict:
 # --- Layout ---
 
 
-def _compute_layout(entity_infos: dict) -> dict:
-    """Position entities on a grid. Facts top-center, dims below."""
+def _compute_layout(entity_infos: dict, relationships: list) -> dict:
+    """Position entities using graph-aware BFS layering.
+
+    Most-connected entities go in the center row, their neighbors
+    in the next row, and so on. Within each row, entities are
+    centered horizontally. This produces a clean hub-and-spoke
+    layout for star schemas.
+    """
     if not entity_infos:
         return {}
 
-    facts = []
-    dims = []
-    others = []
+    all_names = list(entity_infos.keys())
 
-    for name, info in entity_infos.items():
-        etype = info["entity"].entity_type
-        if etype == PhysicalEntityType.FACT_TABLE:
-            facts.append(name)
-        elif etype == PhysicalEntityType.DIMENSION_TABLE:
-            dims.append(name)
-        else:
-            others.append(name)
+    # Build adjacency graph and degree counts
+    adj: dict[str, set[str]] = {n: set() for n in all_names}
+    for rel in relationships:
+        p = rel.parent_physical_entity
+        c = rel.child_physical_entity
+        if p in adj and c in adj:
+            adj[p].add(c)
+            adj[c].add(p)
 
+    # BFS layering from the highest-degree entity
+    # Tiebreak: facts first, then by degree descending
+    def _sort_key(name: str) -> tuple[int, int]:
+        etype = entity_infos[name]["entity"].entity_type
+        type_rank = 0 if etype == PhysicalEntityType.FACT_TABLE else 1
+        return (type_rank, -len(adj[name]))
+
+    sorted_names = sorted(all_names, key=_sort_key)
+
+    # BFS to assign layers
+    layers: list[list[str]] = []
+    assigned: set[str] = set()
+
+    # Start BFS from the highest-priority unassigned node
+    while len(assigned) < len(all_names):
+        # Pick the best unassigned starting node
+        start = None
+        for n in sorted_names:
+            if n not in assigned:
+                start = n
+                break
+        if start is None:
+            break
+
+        # BFS from start
+        queue = [start]
+        assigned.add(start)
+        bfs_layers: list[list[str]] = [[start]]
+
+        while queue:
+            next_queue: list[str] = []
+            layer: list[str] = []
+            for node in queue:
+                for neighbor in sorted(adj[node], key=_sort_key):
+                    if neighbor not in assigned:
+                        assigned.add(neighbor)
+                        next_queue.append(neighbor)
+                        layer.append(neighbor)
+            if layer:
+                bfs_layers.append(layer)
+            queue = next_queue
+
+        # Merge BFS layers into the global layer list
+        for j, layer in enumerate(bfs_layers):
+            while len(layers) <= j:
+                layers.append([])
+            layers[j].extend(layer)
+
+    # Any disconnected entities go into the last layer
+    for n in all_names:
+        if n not in assigned:
+            if not layers:
+                layers.append([])
+            layers[-1].append(n)
+
+    # Sort within each layer: facts first, then by degree, then alphabetical
+    for layer in layers:
+        layer.sort(key=lambda n: (_sort_key(n), n))
+
+    # Position each layer as a centered row
     positions = {}
     y_offset = 80  # below title
 
@@ -225,50 +311,28 @@ def _compute_layout(entity_infos: dict) -> dict:
         lines = _count_content_lines(info)
         return HEADER_HEIGHT + BOX_PADDING + (lines * LINE_HEIGHT) + BOX_PADDING
 
-    # Place facts in a row
-    if facts:
-        row_width = len(facts) * GRID_SPACING_X
-        start_x = 40
-        for i, name in enumerate(facts):
+    # Compute total width needed (widest layer determines canvas width)
+    max_cols = max(len(layer) for layer in layers) if layers else 1
+
+    for layer in layers:
+        # Center this row: compute start_x so the row is centered
+        row_width = len(layer) * GRID_SPACING_X - (GRID_SPACING_X - BOX_WIDTH)
+        total_canvas = max_cols * GRID_SPACING_X
+        start_x = max(40, (total_canvas - row_width) // 2 + 40)
+
+        row_max_h = 0
+        for i, name in enumerate(layer):
             h = _box_height(name)
-            positions[name] = {"x": start_x + i * GRID_SPACING_X, "y": y_offset, "height": h}
-        y_offset += max(_box_height(n) for n in facts) + GRID_SPACING_Y
+            positions[name] = {
+                "x": start_x + i * GRID_SPACING_X,
+                "y": y_offset,
+                "height": h,
+            }
+            row_max_h = max(row_max_h, h)
 
-    # Place dimensions in rows of 3
-    _place_in_rows(dims, entity_infos, positions, y_offset, _box_height)
-    if dims:
-        placed_dims = [positions[n] for n in dims if n in positions]
-        if placed_dims:
-            y_offset = max(p["y"] + p["height"] for p in placed_dims) + GRID_SPACING_Y
-
-    # Place others
-    _place_in_rows(others, entity_infos, positions, y_offset, _box_height)
+        y_offset += row_max_h + GRID_SPACING_Y
 
     return positions
-
-
-def _place_in_rows(
-    names: list[str],
-    entity_infos: dict,
-    positions: dict,
-    y_offset: int,
-    height_fn,
-    cols: int = 3,
-) -> None:
-    """Place entities in a grid of the given column count."""
-    start_x = 40
-    row_y = y_offset
-    row_max_h = 0
-
-    for i, name in enumerate(names):
-        col = i % cols
-        if i > 0 and col == 0:
-            row_y += row_max_h + GRID_SPACING_Y
-            row_max_h = 0
-
-        h = height_fn(name)
-        positions[name] = {"x": start_x + col * GRID_SPACING_X, "y": row_y, "height": h}
-        row_max_h = max(row_max_h, h)
 
 
 def _count_content_lines(info: dict) -> int:
@@ -653,21 +717,30 @@ def _svg_edge_routed(
     side_pair: str,
     label: str = "",
     sublabel: str = "",
-    edge_index: int = 0,
+    channel_index: int = 0,
+    channel_total: int = 1,
 ) -> str:
     """Draw an orthogonal edge between assigned port positions.
 
     Uses Z-shaped routing (exit -> horizontal channel -> enter)
-    so edges stay in the gaps between entity rows.
+    so edges stay in the gaps between entity rows. When multiple
+    edges share the same channel, their horizontal segments are
+    staggered vertically.
     """
     color = ARROW_COLOR
     marker = "arrowhead"
 
+    # Stagger: spread horizontal segments across the channel gap
+    STAGGER_STEP = 14
+    if channel_total > 1:
+        # Center the stagger around the midpoint
+        stagger_offset = (channel_index - (channel_total - 1) / 2) * STAGGER_STEP
+    else:
+        stagger_offset = 0
+
     if side_pair == "bottom-top":
-        # Parent above child: down, across, down
-        mid_y = exit_y + (enter_y - exit_y) // 2
+        mid_y = exit_y + (enter_y - exit_y) // 2 + int(stagger_offset)
         if exit_x == enter_x:
-            # Straight vertical -- no horizontal segment needed
             waypoints = [(exit_x, exit_y), (enter_x, enter_y)]
         else:
             waypoints = [
@@ -677,7 +750,7 @@ def _svg_edge_routed(
                 (enter_x, enter_y),
             ]
     elif side_pair == "top-bottom":
-        mid_y = enter_y + (exit_y - enter_y) // 2
+        mid_y = enter_y + (exit_y - enter_y) // 2 + int(stagger_offset)
         if exit_x == enter_x:
             waypoints = [(exit_x, exit_y), (enter_x, enter_y)]
         else:
@@ -688,7 +761,6 @@ def _svg_edge_routed(
                 (enter_x, enter_y),
             ]
     elif side_pair in ("right-left", "left-right"):
-        # Same row: out side, across, in side
         mid_x = exit_x + (enter_x - exit_x) // 2
         if exit_y == enter_y:
             waypoints = [(exit_x, exit_y), (enter_x, enter_y)]
