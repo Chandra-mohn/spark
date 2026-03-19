@@ -94,6 +94,8 @@ def build_denormalization_plan(
     # Phase 1b: Absorb composition children (embedded subdocuments)
     # Always applied regardless of denormalization mode -- composition means
     # the child data is physically embedded in the parent (e.g., MongoDB arrays).
+    # Guard: never absorb a FACT into a non-FACT. Composition should only
+    # pull subordinate/child entities into their parent, not the reverse.
     for entity in model.entities:
         comp_children = graph.get_composition_children(entity.entity_name)
         for child_name in comp_children:
@@ -108,6 +110,29 @@ def build_denormalization_plan(
                 continue
 
             if plan.is_absorbed(child_name):
+                continue
+
+            # Don't absorb a FACT into a non-FACT entity
+            child_entity = model.get_entity(child_name)
+            if (
+                child_entity
+                and child_entity.entity_type == EntityType.FACT
+                and entity.entity_type != EntityType.FACT
+            ):
+                output.add_log_entry(
+                    rule=TransformationRule.KEEP_SEPARATE,
+                    source_entity=child_name,
+                    target_entity=entity.entity_name,
+                    description=(
+                        f"Skipped composition absorption: '{child_name}' "
+                        f"is a FACT and cannot be absorbed into "
+                        f"non-FACT '{entity.entity_name}'"
+                    ),
+                    rationale=(
+                        "Composition absorption guards against absorbing "
+                        "fact tables into dimension tables"
+                    ),
+                )
                 continue
 
             plan.mark_absorbed(child_name, entity.entity_name)
