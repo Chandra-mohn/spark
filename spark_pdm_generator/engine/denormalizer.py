@@ -91,6 +91,40 @@ def build_denormalization_plan(
                 rationale=f"1:1 relationship -- always merge to reduce joins",
             )
 
+    # Phase 1b: Absorb composition children (embedded subdocuments)
+    # Always applied regardless of denormalization mode -- composition means
+    # the child data is physically embedded in the parent (e.g., MongoDB arrays).
+    for entity in model.entities:
+        comp_children = graph.get_composition_children(entity.entity_name)
+        for child_name in comp_children:
+            if child_name in blocked_denorm:
+                output.add_log_entry(
+                    rule=TransformationRule.OVERRIDE_APPLIED,
+                    source_entity=child_name,
+                    target_entity=entity.entity_name,
+                    description=f"BLOCK_DENORMALIZE override: keeping '{child_name}' separate",
+                    rationale="User override applied",
+                )
+                continue
+
+            if plan.is_absorbed(child_name):
+                continue
+
+            plan.mark_absorbed(child_name, entity.entity_name)
+            output.add_log_entry(
+                rule=TransformationRule.DENORMALIZE_COMPOSITION,
+                source_entity=child_name,
+                target_entity=entity.entity_name,
+                description=(
+                    f"Absorbed composition child '{child_name}' "
+                    f"into '{entity.entity_name}'"
+                ),
+                rationale=(
+                    "Composition relationship (embedded subdocument) -- "
+                    "always absorb regardless of denormalization mode"
+                ),
+            )
+
     denorm_mode = config.denormalization_mode
 
     if denorm_mode == DenormalizationMode.AGGRESSIVE:

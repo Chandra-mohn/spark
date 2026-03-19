@@ -122,6 +122,20 @@ class ERGraph:
                 parents.append(parent)
         return parents
 
+    def get_composition_children(self, entity_name: str) -> list[str]:
+        """Get child entities linked by composition (embedded arrays).
+
+        These are children where is_identifying=True, meaning the child
+        data is embedded in the parent (e.g., MongoDB subdocuments).
+        Always candidates for denormalization regardless of mode.
+        """
+        children = []
+        for child in self.get_children(entity_name):
+            edge_data = self._graph.edges[entity_name, child]
+            if edge_data.get("is_identifying", False):
+                children.append(child)
+        return children
+
     def is_self_referencing(self, entity_name: str) -> bool:
         """Check if entity has a self-referencing FK (hierarchy)."""
         return self._graph.has_edge(entity_name, entity_name)
