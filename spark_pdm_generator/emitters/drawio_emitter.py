@@ -104,7 +104,8 @@ def emit_drawio(
     # Map entity name -> cell ID for connector source/target
     entity_cell_ids: dict[str, int] = {}
 
-    # Build entity cells (header group + body)
+    # Build entity cells -- single cell per entity with HTML header + body
+    # This ensures connectors stay attached when entities are dragged.
     for name, info in entity_infos.items():
         pos = positions.get(name)
         if not pos:
@@ -117,54 +118,25 @@ def emit_drawio(
         colors = ENTITY_COLORS.get(info["entity"].entity_type, DEFAULT_COLORS)
         badge = info["entity"].entity_type.value.replace("_TABLE", "").replace("_", " ")
 
-        # Container group cell (parent for header + body)
-        group_id = next_id
+        cell_id = next_id
         next_id += 1
-        entity_cell_ids[name] = group_id
+        entity_cell_ids[name] = cell_id
+
+        # Build combined HTML: colored header bar + white body
+        cell_html = _build_entity_html(info, colors, badge)
+        cell_value = escape(cell_html, {'"': '&quot;'})
 
         cells.append(
-            f'        <mxCell id="{group_id}" value="" '
-            f'style="group;container=1;collapsible=0;" '
-            f'vertex="1" connectable="1" parent="1">\n'
-            f'          <mxGeometry x="{pos["x"]}" y="{pos["y"]}" '
-            f'width="{BOX_WIDTH}" height="{total_height}" as="geometry"/>\n'
-            f'        </mxCell>'
-        )
-
-        # Header cell
-        header_id = next_id
-        next_id += 1
-        header_text = escape(f"{info['entity'].physical_entity_name}  [{badge}]")
-        cells.append(
-            f'        <mxCell id="{header_id}" '
-            f'value="{header_text}" '
-            f'style="rounded=0;whiteSpace=wrap;html=1;'
-            f'fillColor={colors["header_fill"]};'
-            f'strokeColor={colors["header_stroke"]};'
-            f'fontColor={colors["header_font"]};'
-            f'fontSize=12;fontStyle=1;'
-            f'align=left;verticalAlign=middle;spacingLeft=8;" '
-            f'vertex="1" parent="{group_id}">\n'
-            f'          <mxGeometry width="{BOX_WIDTH}" height="{HEADER_HEIGHT}" '
-            f'as="geometry"/>\n'
-            f'        </mxCell>'
-        )
-
-        # Body cell with multi-line content
-        body_id = next_id
-        next_id += 1
-        body_html = _build_body_html(body_lines)
-        cells.append(
-            f'        <mxCell id="{body_id}" '
-            f'value="{escape(body_html)}" '
+            f'        <mxCell id="{cell_id}" '
+            f'value="{cell_value}" '
             f'style="rounded=0;whiteSpace=wrap;html=1;overflow=fill;'
             f'fillColor={colors["body_fill"]};'
             f'strokeColor={colors["body_stroke"]};'
             f'fontSize=11;fontColor=#333333;'
-            f'align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;" '
-            f'vertex="1" parent="{group_id}">\n'
-            f'          <mxGeometry y="{HEADER_HEIGHT}" '
-            f'width="{BOX_WIDTH}" height="{body_height}" as="geometry"/>\n'
+            f'align=left;verticalAlign=top;spacing=0;" '
+            f'vertex="1" parent="1">\n'
+            f'          <mxGeometry x="{pos["x"]}" y="{pos["y"]}" '
+            f'width="{BOX_WIDTH}" height="{total_height}" as="geometry"/>\n'
             f'        </mxCell>'
         )
 
@@ -466,12 +438,43 @@ def _build_body_lines(info: dict) -> list[str]:
     return lines
 
 
-def _build_body_html(lines: list[str]) -> str:
-    """Convert body lines to HTML for Draw.io cell value."""
-    html_lines = []
-    for line in lines:
+def _build_entity_html(info: dict, colors: dict, badge: str) -> str:
+    """Build combined HTML for a single-cell entity (header + body).
+
+    The header is a colored div at the top, the body is white below.
+    This keeps everything in one cell so connectors stay attached.
+    """
+    name = info["entity"].physical_entity_name
+    body_lines = _build_body_lines(info)
+
+    # Header bar as a styled div
+    header_html = (
+        f'<div style="background:{colors["header_fill"]};'
+        f'color:{colors["header_font"]};'
+        f'padding:6px 8px;font-weight:bold;font-size:12px;'
+        f'border-bottom:1px solid {colors["header_stroke"]};">'
+        f'{escape(name)}'
+        f'<span style="float:right;font-weight:normal;font-size:11px;">'
+        f'[{escape(badge)}]</span></div>'
+    )
+
+    # Body content
+    body_parts = []
+    for line in body_lines:
         if line == "---":
-            html_lines.append("<hr/>")
+            body_parts.append(
+                '<hr style="border:none;border-top:1px solid #DDD;margin:4px 0;"/>'
+            )
         else:
-            html_lines.append(f"<div>{escape(line)}</div>")
-    return "".join(html_lines)
+            body_parts.append(
+                f'<div style="padding:0 8px;font-size:11px;'
+                f'line-height:{LINE_HEIGHT}px;">{escape(line)}</div>'
+            )
+
+    body_html = (
+        '<div style="padding:4px 0;">'
+        + "".join(body_parts)
+        + '</div>'
+    )
+
+    return header_html + body_html
