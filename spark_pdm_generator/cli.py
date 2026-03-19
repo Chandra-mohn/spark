@@ -4,6 +4,8 @@ from pathlib import Path
 
 import typer
 
+from spark_pdm_generator.models.logical import LogicalModel
+from spark_pdm_generator.models.physical import PhysicalModel
 from spark_pdm_generator.parsers.column_mapper import (
     create_default_mapping,
     load_column_mapping,
@@ -16,6 +18,44 @@ from spark_pdm_generator.parsers.inspector import (
 from spark_pdm_generator.parsers.lite_parser import LiteParser, LiteParseError
 from spark_pdm_generator.pipeline import run_pipeline
 from spark_pdm_generator.pipeline_lite import run_lite_pipeline
+
+def _report_attribute_coverage(
+    model: LogicalModel, result: PhysicalModel
+) -> None:
+    """Compare logical attributes against physical attributes and report gaps."""
+    # Build set of (entity, attribute) from logical model
+    logical_attrs = {
+        (a.entity_name, a.attribute_name) for a in model.attributes
+    }
+
+    # Build set of (source_entity, source_attribute) from physical model
+    # Skip duplicated FK columns (they have source_attribute set)
+    physical_sources = set()
+    for pa in result.physical_attributes:
+        if pa.source_entity and pa.source_attribute:
+            physical_sources.add((pa.source_entity, pa.source_attribute))
+
+    mapped = logical_attrs & physical_sources
+    unmapped = logical_attrs - physical_sources
+    total = len(logical_attrs)
+    mapped_count = len(mapped)
+
+    if total == 0:
+        typer.echo("\n  Attribute coverage: no logical attributes to check")
+        return
+
+    pct = (mapped_count / total) * 100
+    typer.echo(f"\n  Attribute coverage: {mapped_count}/{total} logical attributes mapped ({pct:.0f}%)")
+
+    if unmapped:
+        typer.echo(f"  Unmapped attributes: {len(unmapped)}")
+        # Group by entity for readability
+        by_entity: dict[str, list[str]] = {}
+        for entity, attr in sorted(unmapped):
+            by_entity.setdefault(entity, []).append(attr)
+        for entity, attrs in sorted(by_entity.items()):
+            typer.echo(f"    {entity}: {', '.join(attrs)}")
+
 
 app = typer.Typer(
     name="spark-pdm",
@@ -109,6 +149,8 @@ def generate(
     typer.echo(f"  Transformation log:     {len(result.transformation_log)} decisions")
     typer.echo(f"  Warnings:               {len(result.warnings)}")
 
+    _report_attribute_coverage(model, result)
+
     typer.echo(f"\nOutput written to:")
     typer.echo(f"  Excel:   {output_file}")
     typer.echo(f"  DDL:     {output_dir}/ddl/")
@@ -193,6 +235,8 @@ def generate_lite(
     typer.echo(f"  Physical relationships: {len(result.physical_relationships)}")
     typer.echo(f"  Transformation log:     {len(result.transformation_log)} decisions")
     typer.echo(f"  Warnings:               {len(result.warnings)}")
+
+    _report_attribute_coverage(model, result)
 
     typer.echo(f"\nOutput written to:")
     typer.echo(f"  Excel:   {output_file}")
