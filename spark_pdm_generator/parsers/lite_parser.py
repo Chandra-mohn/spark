@@ -66,9 +66,10 @@ STORAGE_BYTES: dict[str, int] = {
 class LiteParser:
     """Reads a simplified 3-sheet Excel workbook and produces a LogicalModel."""
 
-    def __init__(self) -> None:
+    def __init__(self, flip_composition: bool = False) -> None:
         self.errors: list[str] = []
         self.warnings: list[str] = []
+        self.flip_composition = flip_composition
 
     def parse(self, workbook_path: Path) -> LogicalModel:
         """Parse the lite input workbook into a LogicalModel.
@@ -313,6 +314,17 @@ class LiteParser:
                 )
 
             is_composition = stereotype == "composition"
+
+            # Flip composition direction if requested -- when the input data
+            # has subdocument as ParentEntity and collection as ChildEntity
+            if is_composition and self.flip_composition:
+                parent_entity, child_entity = child_entity, parent_entity
+                parent_cols, child_cols = child_cols, parent_cols
+                self.warnings.append(
+                    f"Relationships row {i}: flipped composition "
+                    f"direction -- parent is now '{parent_entity}', "
+                    f"child is now '{child_entity}'"
+                )
 
             description = ""
             if is_composition:

@@ -134,17 +134,23 @@ def generate_lite(
         "--output-dir", "-d",
         help="Directory for DDL output files.",
     ),
+    flip_composition: bool = typer.Option(
+        False,
+        "--flip-composition",
+        help="Swap parent/child on composition relationships. Use when the input "
+        "data has the subdocument as ParentEntity and the collection as ChildEntity.",
+    ),
 ) -> None:
     """Generate a Spark/Parquet PDM from a minimal 3-sheet workbook.
 
     Reads Entities (with optional RowCount), Attributes, and Relationships
     sheets. Estimates record lengths from schema metadata and applies
     heuristic defaults for missing statistics.
-
-    Outputs PDM Excel + Parquet DDL files (no ETL, no Iceberg).
     """
+    if flip_composition:
+        typer.echo("  --flip-composition: will swap parent/child on composition relationships")
     typer.echo(f"Parsing lite input workbook: {input_file}")
-    parser = LiteParser()
+    parser = LiteParser(flip_composition=flip_composition)
     try:
         model = parser.parse(input_file)
     except LiteParseError as e:

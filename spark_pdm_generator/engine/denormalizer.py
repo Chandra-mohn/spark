@@ -30,13 +30,28 @@ class DenormalizationPlan:
         self.physical_sources: dict[str, list[str]] = {}
 
     def mark_absorbed(self, entity_name: str, into_entity: str) -> None:
-        """Mark an entity as absorbed into another physical table."""
+        """Mark an entity as absorbed into another physical table.
+
+        Handles transitive absorption: if entity_name already has sources
+        absorbed into it (e.g., composition children), those sources are
+        carried over to into_entity so no attributes are orphaned.
+        """
         self.absorbed.add(entity_name)
         self.merge_targets[entity_name] = into_entity
         if into_entity not in self.physical_sources:
             self.physical_sources[into_entity] = [into_entity]
         if entity_name not in self.physical_sources[into_entity]:
             self.physical_sources[into_entity].append(entity_name)
+
+        # Carry over any sources that were previously absorbed into entity_name
+        if entity_name in self.physical_sources:
+            for prior_source in self.physical_sources[entity_name]:
+                if (
+                    prior_source != entity_name
+                    and prior_source != into_entity
+                    and prior_source not in self.physical_sources[into_entity]
+                ):
+                    self.physical_sources[into_entity].append(prior_source)
 
     def is_absorbed(self, entity_name: str) -> bool:
         return entity_name in self.absorbed
@@ -91,12 +106,16 @@ def build_denormalization_plan(
                 rationale=f"1:1 relationship -- always merge to reduce joins",
             )
 
-    # Phase 1b: Absorb composition children (embedded subdocuments)
-    # Always applied regardless of denormalization mode -- composition means
-    # the child data is physically embedded in the parent (e.g., MongoDB arrays).
-    # Guard: never absorb a FACT into a non-FACT. Composition should only
-    # pull subordinate/child entities into their parent, not the reverse.
+    # Phase 1b: Absorb composition children into FACT tables only.
+    # Composition means the child data is embedded in the parent (MongoDB
+    # subdocuments). We only absorb when the parent is a FACT -- this avoids
+    # cascading absorption where dimension parents swallow fact children.
+    # Non-FACT composition parents are handled by AGGRESSIVE mode later
+    # (the fact absorbs the dimension, which transitively brings the
+    # composition children along).
     for entity in model.entities:
+        if entity.entity_type != EntityType.FACT:
+            continue
         comp_children = graph.get_composition_children(entity.entity_name)
         for child_name in comp_children:
             if child_name in blocked_denorm:
@@ -112,29 +131,6 @@ def build_denormalization_plan(
             if plan.is_absorbed(child_name):
                 continue
 
-            # Don't absorb a FACT into a non-FACT entity
-            child_entity = model.get_entity(child_name)
-            if (
-                child_entity
-                and child_entity.entity_type == EntityType.FACT
-                and entity.entity_type != EntityType.FACT
-            ):
-                output.add_log_entry(
-                    rule=TransformationRule.KEEP_SEPARATE,
-                    source_entity=child_name,
-                    target_entity=entity.entity_name,
-                    description=(
-                        f"Skipped composition absorption: '{child_name}' "
-                        f"is a FACT and cannot be absorbed into "
-                        f"non-FACT '{entity.entity_name}'"
-                    ),
-                    rationale=(
-                        "Composition absorption guards against absorbing "
-                        "fact tables into dimension tables"
-                    ),
-                )
-                continue
-
             plan.mark_absorbed(child_name, entity.entity_name)
             output.add_log_entry(
                 rule=TransformationRule.DENORMALIZE_COMPOSITION,
@@ -146,7 +142,7 @@ def build_denormalization_plan(
                 ),
                 rationale=(
                     "Composition relationship (embedded subdocument) -- "
-                    "always absorb regardless of denormalization mode"
+                    "absorbing into parent FACT table"
                 ),
             )
 
