@@ -152,7 +152,7 @@ def generate(
     typer.echo(f"  DDL:     {output_dir}/ddl/")
     typer.echo(f"  ETL SQL: {output_dir}/etl/sql/")
     typer.echo(f"  ETL Py:  {output_dir}/etl/pyspark/")
-    typer.echo(f"  Diagram: {output_dir}/physical_model.svg")
+    typer.echo(f"  Diagram: {output_dir}/physical_model.drawio")
 
 
 @app.command("generate-lite")
@@ -240,7 +240,7 @@ def generate_lite(
     typer.echo(f"  DDL:     {output_dir}/ddl/")
     typer.echo(f"  ETL SQL: {output_dir}/etl/sql/")
     typer.echo(f"  ETL Py:  {output_dir}/etl/pyspark/")
-    typer.echo(f"  Diagram: {output_dir}/physical_model.svg")
+    typer.echo(f"  Diagram: {output_dir}/physical_model.drawio")
 
 
 @app.command("inspect")

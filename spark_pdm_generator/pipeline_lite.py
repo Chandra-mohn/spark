@@ -12,7 +12,7 @@ input data becomes available.
 from pathlib import Path
 
 from spark_pdm_generator.emitters.ddl_builder import emit_ddl_files
-from spark_pdm_generator.emitters.diagram_emitter import emit_diagram
+from spark_pdm_generator.emitters.drawio_emitter import emit_drawio
 from spark_pdm_generator.emitters.etl_builder import emit_etl_files
 from spark_pdm_generator.emitters.excel_emitter import emit_excel
 from spark_pdm_generator.engine.classifier import classify_entities, validate_classifications
@@ -127,10 +127,10 @@ def run_lite_pipeline(
     emit_ddl_files(output, output_dir, include_iceberg=include_iceberg)
     emit_etl_files(output, output_dir, logical_model=model)
 
-    # Diagram
-    diagram_path = output_dir / "physical_model.svg"
+    # Diagram (Draw.io -- editable in diagrams.net)
+    diagram_path = output_dir / "physical_model.drawio"
     domain_name = model.entities[0].domain if model.entities else ""
-    emit_diagram(
+    emit_drawio(
         output, diagram_path,
         domain_name=domain_name,
         denormalization_mode=model.config.denormalization_mode.value,
