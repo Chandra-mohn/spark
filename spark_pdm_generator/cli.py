@@ -49,12 +49,8 @@ def _report_attribute_coverage(
 
     if unmapped:
         typer.echo(f"  Unmapped attributes: {len(unmapped)}")
-        # Group by entity for readability
-        by_entity: dict[str, list[str]] = {}
         for entity, attr in sorted(unmapped):
-            by_entity.setdefault(entity, []).append(attr)
-        for entity, attrs in sorted(by_entity.items()):
-            typer.echo(f"    {entity}: {', '.join(attrs)}")
+            typer.echo(f"    {entity}.{attr}")
 
 
 app = typer.Typer(

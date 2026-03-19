@@ -28,7 +28,7 @@ def emit_excel(output: PhysicalModel, output_path: Path) -> None:
         "physical_entity_name", "source_entities", "entity_type",
         "grain_description", "domain", "partition_columns",
         "bucket_column", "bucket_count", "sort_columns",
-        "estimated_row_count", "estimated_size_bytes",
+        "estimated_row_count", "estimated_size_mb",
         "estimated_file_count", "row_group_size_mb",
         "compression_codec", "storage_format", "denormalization_notes",
     ], [
@@ -43,7 +43,7 @@ def emit_excel(output: PhysicalModel, output_path: Path) -> None:
             e.bucket_count,
             ", ".join(f"{sc.column_name} {sc.order.value}" for sc in e.sort_columns),
             e.estimated_row_count,
-            e.estimated_size_bytes,
+            round(e.estimated_size_bytes / (1024 * 1024)) if e.estimated_size_bytes else None,
             e.estimated_file_count,
             e.row_group_size_mb,
             e.compression_codec,
