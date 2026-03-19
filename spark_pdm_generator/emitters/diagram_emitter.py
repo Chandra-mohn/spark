@@ -38,8 +38,9 @@ ARROW_COLOR = "#333333"
 ABSORBED_ARROW_COLOR = "#999999"
 BACKGROUND_COLOR = "#FAFAFA"
 GRID_SPACING_X = 440
-GRID_SPACING_Y = 60  # gap between rows for edge routing channels
+GRID_SPACING_Y = 80  # gap between rows for edge routing channels
 PORT_PADDING = 30  # min distance from box corner for port placement
+MAX_COLS_PER_ROW = 4  # max entities per row before wrapping
 
 
 def emit_diagram(
@@ -224,17 +225,16 @@ def _build_entity_infos(output: PhysicalModel) -> dict:
 def _compute_layout(entity_infos: dict, relationships: list) -> dict:
     """Position entities using graph-aware BFS layering.
 
-    Most-connected entities go in the center row, their neighbors
-    in the next row, and so on. Within each row, entities are
-    centered horizontally. This produces a clean hub-and-spoke
-    layout for star schemas.
+    Facts always go in row 0 together. BFS from facts determines
+    dimension tiers. Rows wider than MAX_COLS_PER_ROW are split.
+    Each row is centered horizontally.
     """
     if not entity_infos:
         return {}
 
     all_names = list(entity_infos.keys())
 
-    # Build adjacency graph and degree counts
+    # Build adjacency graph
     adj: dict[str, set[str]] = {n: set() for n in all_names}
     for rel in relationships:
         p = rel.parent_physical_entity
@@ -243,66 +243,53 @@ def _compute_layout(entity_infos: dict, relationships: list) -> dict:
             adj[p].add(c)
             adj[c].add(p)
 
-    # BFS layering from the highest-degree entity
-    # Tiebreak: facts first, then by degree descending
-    def _sort_key(name: str) -> tuple[int, int]:
+    def _sort_key(name: str) -> tuple[int, int, str]:
         etype = entity_infos[name]["entity"].entity_type
         type_rank = 0 if etype == PhysicalEntityType.FACT_TABLE else 1
-        return (type_rank, -len(adj[name]))
+        return (type_rank, -len(adj[name]), name)
 
-    sorted_names = sorted(all_names, key=_sort_key)
+    # Separate facts from non-facts -- facts always go in layer 0
+    facts = [
+        n for n in all_names
+        if entity_infos[n]["entity"].entity_type == PhysicalEntityType.FACT_TABLE
+    ]
+    facts.sort(key=_sort_key)
 
-    # BFS to assign layers
-    layers: list[list[str]] = []
-    assigned: set[str] = set()
+    assigned: set[str] = set(facts)
 
-    # Start BFS from the highest-priority unassigned node
-    while len(assigned) < len(all_names):
-        # Pick the best unassigned starting node
-        start = None
-        for n in sorted_names:
-            if n not in assigned:
-                start = n
-                break
-        if start is None:
-            break
+    # BFS from ALL facts simultaneously to find dimension tiers
+    bfs_layers: list[list[str]] = []
+    queue = list(facts)
+    while queue:
+        next_queue: list[str] = []
+        layer: list[str] = []
+        for node in queue:
+            for neighbor in sorted(adj[node], key=_sort_key):
+                if neighbor not in assigned:
+                    assigned.add(neighbor)
+                    next_queue.append(neighbor)
+                    layer.append(neighbor)
+        if layer:
+            bfs_layers.append(layer)
+        queue = next_queue
 
-        # BFS from start
-        queue = [start]
-        assigned.add(start)
-        bfs_layers: list[list[str]] = [[start]]
+    # Pick up any disconnected entities
+    disconnected = [n for n in all_names if n not in assigned]
+    disconnected.sort(key=_sort_key)
+    if disconnected:
+        bfs_layers.append(disconnected)
 
-        while queue:
-            next_queue: list[str] = []
-            layer: list[str] = []
-            for node in queue:
-                for neighbor in sorted(adj[node], key=_sort_key):
-                    if neighbor not in assigned:
-                        assigned.add(neighbor)
-                        next_queue.append(neighbor)
-                        layer.append(neighbor)
-            if layer:
-                bfs_layers.append(layer)
-            queue = next_queue
+    # Build final row list: facts first, then BFS tiers
+    raw_rows: list[list[str]] = [facts] + bfs_layers
 
-        # Merge BFS layers into the global layer list
-        for j, layer in enumerate(bfs_layers):
-            while len(layers) <= j:
-                layers.append([])
-            layers[j].extend(layer)
+    # Split rows that exceed MAX_COLS_PER_ROW
+    rows: list[list[str]] = []
+    for row in raw_rows:
+        row.sort(key=_sort_key)
+        for chunk_start in range(0, len(row), MAX_COLS_PER_ROW):
+            rows.append(row[chunk_start:chunk_start + MAX_COLS_PER_ROW])
 
-    # Any disconnected entities go into the last layer
-    for n in all_names:
-        if n not in assigned:
-            if not layers:
-                layers.append([])
-            layers[-1].append(n)
-
-    # Sort within each layer: facts first, then by degree, then alphabetical
-    for layer in layers:
-        layer.sort(key=lambda n: (_sort_key(n), n))
-
-    # Position each layer as a centered row
+    # Position each row, centered horizontally
     positions = {}
     y_offset = 80  # below title
 
@@ -311,17 +298,16 @@ def _compute_layout(entity_infos: dict, relationships: list) -> dict:
         lines = _count_content_lines(info)
         return HEADER_HEIGHT + BOX_PADDING + (lines * LINE_HEIGHT) + BOX_PADDING
 
-    # Compute total width needed (widest layer determines canvas width)
-    max_cols = max(len(layer) for layer in layers) if layers else 1
+    # Canvas width based on widest row (capped at MAX_COLS_PER_ROW)
+    max_cols = max(len(row) for row in rows) if rows else 1
+    total_canvas = max_cols * GRID_SPACING_X + 80  # 40px margin each side
 
-    for layer in layers:
-        # Center this row: compute start_x so the row is centered
-        row_width = len(layer) * GRID_SPACING_X - (GRID_SPACING_X - BOX_WIDTH)
-        total_canvas = max_cols * GRID_SPACING_X
-        start_x = max(40, (total_canvas - row_width) // 2 + 40)
+    for row in rows:
+        row_width = len(row) * GRID_SPACING_X - (GRID_SPACING_X - BOX_WIDTH)
+        start_x = max(40, (total_canvas - row_width) // 2)
 
         row_max_h = 0
-        for i, name in enumerate(layer):
+        for i, name in enumerate(row):
             h = _box_height(name)
             positions[name] = {
                 "x": start_x + i * GRID_SPACING_X,
