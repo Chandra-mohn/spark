@@ -53,13 +53,6 @@ def _split_entity(
     domain_groups: dict[str, list[PhysicalAttribute]] = {}
     key_attrs: list[PhysicalAttribute] = []
 
-    # Build set of primary key attribute names for this entity
-    pk_names: set[str] = set()
-    for source_name in phys_entity.source_entities:
-        for pk_attr in model.get_primary_keys(source_name):
-            pk_names.add(pk_attr.attribute_name)
-            pk_names.add(f"{source_name}_{pk_attr.attribute_name}")
-
     for attr in attrs:
         # Check for forced domain group override
         if attr.attribute_name in force_domain_groups:
@@ -77,8 +70,7 @@ def _split_entity(
                 domain = source_entity.domain if source_entity else defaults.DEFAULT_DOMAIN
 
         # Key columns (PK, bucket, partition) go into ALL domain groups
-        is_pk = attr.attribute_name in pk_names
-        if is_pk or attr.is_bucket_col or attr.is_partition_col:
+        if attr.is_primary_key or attr.is_bucket_col or attr.is_partition_col:
             key_attrs.append(attr)
             continue
 

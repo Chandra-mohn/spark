@@ -18,15 +18,16 @@ from openpyxl.worksheet.worksheet import Worksheet
 from spark_pdm_generator.models.logical import (
     Attribute,
     Cardinality,
-    Compression,
     Config,
-    DenormalizationMode,
     Entity,
     EntityType,
     LogicalModel,
-    ModelType,
     Relationship,
-    TargetFormat,
+)
+from spark_pdm_generator.parsers.utils import (
+    build_config_from_dict as _build_config_from_dict,
+    parse_enum as _parse_enum,
+    parse_int as _parse_int,
 )
 
 
@@ -98,6 +99,25 @@ class LiteParser:
             config = self._parse_config(wb)
         finally:
             wb.close()
+
+        # Warn on duplicate entity names
+        seen_entities: set[str] = set()
+        for e in entities:
+            if e.entity_name in seen_entities:
+                self.warnings.append(
+                    f"Duplicate entity name: '{e.entity_name}'"
+                )
+            seen_entities.add(e.entity_name)
+
+        # Warn on duplicate (entity, attribute) pairs
+        seen_attrs: set[tuple[str, str]] = set()
+        for a in attributes:
+            key = (a.entity_name, a.attribute_name)
+            if key in seen_attrs:
+                self.warnings.append(
+                    f"Duplicate attribute: '{a.entity_name}.{a.attribute_name}'"
+                )
+            seen_attrs.add(key)
 
         # Validate: warn about entities with zero attributes
         entity_names = {e.entity_name for e in entities}
@@ -302,7 +322,13 @@ class LiteParser:
             )
 
             # Parse cardinality
-            cardinality = _parse_cardinality(rel_type)
+            cardinality, cardinality_defaulted = _parse_cardinality(rel_type)
+            if cardinality_defaulted:
+                self.warnings.append(
+                    f"Relationships row {i}: unrecognized RelationshipType "
+                    f"'{rel_type}' for {parent_entity} -> {child_entity}, "
+                    f"defaulting to 1:N"
+                )
 
             # Parse join attributes: "Entity.AttrName = Entity.AttrName"
             parent_cols, child_cols = _parse_join_attributes(join_attrs)
@@ -434,26 +460,22 @@ def _str(value: Any) -> str:
     return str(value).strip()
 
 
-def _parse_int(value: Any) -> Optional[int]:
-    """Parse a value to int, returning None if not possible."""
-    if value is None:
-        return None
-    try:
-        return int(float(str(value)))
-    except (ValueError, TypeError):
-        return None
 
 
-def _parse_cardinality(value: str) -> Cardinality:
-    """Parse relationship type string to Cardinality enum."""
+def _parse_cardinality(value: str) -> tuple[Cardinality, bool]:
+    """Parse relationship type string to Cardinality enum.
+
+    Returns (cardinality, defaulted) where defaulted is True if the value
+    was not recognized and the default 1:N was used.
+    """
     normalized = value.strip().upper().replace(" ", "")
     if normalized in ("1:1", "1-1", "ONE_TO_ONE"):
-        return Cardinality.ONE_TO_ONE
+        return Cardinality.ONE_TO_ONE, False
     if normalized in ("1:N", "1-N", "1:MANY", "ONE_TO_MANY"):
-        return Cardinality.ONE_TO_MANY
+        return Cardinality.ONE_TO_MANY, False
     if normalized in ("M:N", "M-N", "MANY_TO_MANY", "N:M"):
-        return Cardinality.MANY_TO_MANY
-    return Cardinality.ONE_TO_MANY
+        return Cardinality.MANY_TO_MANY, False
+    return Cardinality.ONE_TO_MANY, True
 
 
 def _parse_join_attributes(join_str: str) -> tuple[list[str], list[str]]:
@@ -503,7 +525,13 @@ def _extract_attr_from_join_part(part: str) -> str:
     dot_pos = part.find(".")
     if dot_pos < 0:
         return ""
+    # Validate: must have content on both sides of the dot
+    entity_part = part[:dot_pos].strip()
+    if not entity_part:
+        return ""
     attr_display_name = part[dot_pos + 1:].strip()
+    if not attr_display_name:
+        return ""
     # Convert display name to code format: uppercase, spaces -> underscores
     return attr_display_name.upper().replace(" ", "_")
 
@@ -518,49 +546,3 @@ def _build_name_map(canonical_names: list[str]) -> dict[str, str]:
     return {name.lower(): name for name in canonical_names}
 
 
-def _parse_enum(value: Any, enum_class: type, default: Any) -> Any:
-    """Parse a value into an enum, falling back to default."""
-    if value is None:
-        return default
-    str_val = str(value).strip().upper()
-    try:
-        return enum_class(str_val)
-    except ValueError:
-        for member in enum_class:
-            if member.name == str_val or member.value == str_val:
-                return member
-        return default
-
-
-def _build_config_from_dict(d: dict[str, Any]) -> Config:
-    """Build a Config from a key-value dict, applying type coercion."""
-    kwargs: dict[str, Any] = {}
-
-    str_enum_fields = {
-        "model_type": ModelType,
-        "target_format": TargetFormat,
-        "compression": Compression,
-        "denormalization_mode": DenormalizationMode,
-    }
-    int_fields = [
-        "cluster_parallelism",
-        "target_file_size_mb",
-        "column_threshold_for_vertical_split",
-        "small_dim_row_threshold",
-        "dictionary_encoding_cardinality_threshold",
-        "max_partition_cardinality",
-        "row_group_size_mb",
-        "default_bucket_count",
-    ]
-
-    for key, enum_class in str_enum_fields.items():
-        if key in d:
-            kwargs[key] = _parse_enum(d[key], enum_class, None)
-
-    for key in int_fields:
-        if key in d:
-            val = _parse_int(d[key])
-            if val is not None:
-                kwargs[key] = val
-
-    return Config(**{k: v for k, v in kwargs.items() if v is not None})

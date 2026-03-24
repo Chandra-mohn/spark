@@ -61,6 +61,14 @@ TYPE_MAP: dict[str, tuple[str, str]] = {
     "BLOB": ("BINARY", "BINARY"),
 }
 
+# Classification heuristics
+REFERENCE_MAX_ROW_COUNT = 1_000
+REFERENCE_MAX_ATTR_COUNT = 20
+FACT_MIN_IN_DEGREE = 2
+FACT_MIN_ATTR_COUNT = 20
+FACT_MIN_ROW_COUNT = 10_000_000
+DIMENSION_MAX_IN_DEGREE = 2
+
 # Default domain name
 DEFAULT_DOMAIN = "general"
 

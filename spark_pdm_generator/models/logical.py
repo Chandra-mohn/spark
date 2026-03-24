@@ -3,7 +3,7 @@
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class EntityType(str, Enum):
@@ -126,6 +126,21 @@ class Relationship(BaseModel):
     is_identifying: bool = False
     description: str = ""
 
+    @model_validator(mode="after")
+    def _validate_key_column_counts(self) -> "Relationship":
+        if (
+            self.parent_key_columns
+            and self.child_key_columns
+            and len(self.parent_key_columns) != len(self.child_key_columns)
+        ):
+            raise ValueError(
+                f"parent_key_columns ({len(self.parent_key_columns)}) and "
+                f"child_key_columns ({len(self.child_key_columns)}) must have "
+                f"the same length for relationship "
+                f"{self.parent_entity} -> {self.child_entity}"
+            )
+        return self
+
 
 class DataDistribution(BaseModel):
     """Represents a row from the data_distribution input sheet."""
@@ -179,6 +194,23 @@ class Config(BaseModel):
     max_partition_cardinality: int = 10_000
     row_group_size_mb: int = 256
     default_bucket_count: int = 2048
+
+    @field_validator("cluster_parallelism", "target_file_size_mb",
+                     "row_group_size_mb", "default_bucket_count")
+    @classmethod
+    def _must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"must be > 0, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_cross_field(self) -> "Config":
+        if self.default_bucket_count > self.cluster_parallelism:
+            raise ValueError(
+                f"default_bucket_count ({self.default_bucket_count}) "
+                f"must be <= cluster_parallelism ({self.cluster_parallelism})"
+            )
+        return self
 
 
 class LogicalModel(BaseModel):

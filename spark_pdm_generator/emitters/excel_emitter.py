@@ -57,14 +57,16 @@ def emit_excel(output: PhysicalModel, output_path: Path) -> None:
     _write_sheet(wb, "physical_attributes", [
         "physical_entity_name", "attribute_name", "source_entity",
         "source_attribute", "parquet_type", "logical_type", "encoding",
-        "nullable", "is_partition_col", "is_bucket_col", "is_sort_col",
-        "sort_order", "estimated_cardinality", "estimated_null_pct", "notes",
+        "nullable", "is_primary_key", "is_partition_col", "is_bucket_col",
+        "is_sort_col", "sort_order", "estimated_cardinality",
+        "estimated_null_pct", "notes",
     ], [
         [
             a.physical_entity_name, a.attribute_name, a.source_entity,
             a.source_attribute, a.parquet_type, a.logical_type,
             a.encoding.value if hasattr(a.encoding, "value") else str(a.encoding),
             "Y" if a.nullable else "N",
+            "Y" if a.is_primary_key else "N",
             "Y" if a.is_partition_col else "N",
             "Y" if a.is_bucket_col else "N",
             "Y" if a.is_sort_col else "N",
@@ -85,7 +87,7 @@ def emit_excel(output: PhysicalModel, output_path: Path) -> None:
             r.join_type.value, ", ".join(r.join_columns),
             "Y" if r.co_partitioned else "N",
             "Y" if r.co_bucketed else "N",
-            r.estimated_join_cost, r.notes,
+            r.estimated_join_cost.value, r.notes,
         ]
         for r in output.physical_relationships
     ])

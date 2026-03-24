@@ -79,48 +79,47 @@ class ERGraph:
                 parents.append(parent)
         return parents
 
-    def get_small_dimension_parents(
-        self, entity_name: str, model: LogicalModel, threshold: int
+    def _get_one_to_many_parents(
+        self, entity_name: str, model: Optional[LogicalModel] = None,
+        threshold: Optional[int] = None, below_threshold: Optional[bool] = None,
     ) -> list[str]:
-        """Get parent dimensions small enough to denormalize.
-
-        Returns parents where:
-        - Cardinality is 1:N (parent is the "one" side)
-        - Parent estimated_row_count < threshold
-        """
+        """Get parent dimensions with 1:N cardinality, optionally filtered by size."""
         parents = []
         for parent in self.get_parents(entity_name):
             rel = self.get_relationship(parent, entity_name)
-            if rel and rel.cardinality == Cardinality.ONE_TO_MANY:
+            if not rel or rel.cardinality != Cardinality.ONE_TO_MANY:
+                continue
+            if threshold is not None and model is not None and below_threshold is not None:
                 row_count = model.get_entity_row_count(parent)
-                if row_count is not None and row_count < threshold:
-                    parents.append(parent)
+                if below_threshold:
+                    if row_count is not None and row_count < threshold:
+                        parents.append(parent)
+                else:
+                    if row_count is None or row_count >= threshold:
+                        parents.append(parent)
+            else:
+                parents.append(parent)
         return parents
+
+    def get_small_dimension_parents(
+        self, entity_name: str, model: LogicalModel, threshold: int
+    ) -> list[str]:
+        """Get parent dimensions small enough to denormalize."""
+        return self._get_one_to_many_parents(
+            entity_name, model, threshold, below_threshold=True
+        )
 
     def get_large_dimension_parents(
         self, entity_name: str, model: LogicalModel, threshold: int
     ) -> list[str]:
         """Get parent dimensions too large to denormalize."""
-        parents = []
-        for parent in self.get_parents(entity_name):
-            rel = self.get_relationship(parent, entity_name)
-            if rel and rel.cardinality == Cardinality.ONE_TO_MANY:
-                row_count = model.get_entity_row_count(parent)
-                if row_count is None or row_count >= threshold:
-                    parents.append(parent)
-        return parents
+        return self._get_one_to_many_parents(
+            entity_name, model, threshold, below_threshold=False
+        )
 
     def get_all_dimension_parents(self, entity_name: str) -> list[str]:
-        """Get ALL parent dimensions with 1:N cardinality regardless of size.
-
-        Used by aggressive denormalization mode to absorb every parent.
-        """
-        parents = []
-        for parent in self.get_parents(entity_name):
-            rel = self.get_relationship(parent, entity_name)
-            if rel and rel.cardinality == Cardinality.ONE_TO_MANY:
-                parents.append(parent)
-        return parents
+        """Get ALL parent dimensions with 1:N cardinality regardless of size."""
+        return self._get_one_to_many_parents(entity_name)
 
     def get_composition_children(self, entity_name: str) -> list[str]:
         """Get child entities linked by composition (embedded arrays).

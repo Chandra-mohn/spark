@@ -185,10 +185,11 @@ def _fuzzy_match_column(
         if header.strip().lower() == internal_lower:
             return header
 
-    # Internal field contained in header or vice versa
+    # Header contained in internal field (e.g., header="entity" matches internal="entity_name")
+    # but NOT the reverse -- prevents "entity_name" matching "parent_entity_name"
     for header in actual_headers:
         header_lower = header.strip().lower()
-        if internal_lower in header_lower or header_lower in internal_lower:
+        if header_lower in internal_lower:
             return header
 
     # Word overlap

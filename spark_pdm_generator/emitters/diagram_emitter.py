@@ -1,11 +1,11 @@
 """SVG diagram emitter: generates a visual physical model diagram."""
 
-from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from xml.sax.saxutils import escape
 
+from spark_pdm_generator.emitters.diagram_common import build_entity_infos
 from spark_pdm_generator.models.physical import (
     PhysicalEntity,
     PhysicalEntityType,
@@ -58,7 +58,7 @@ def emit_diagram(
         denormalization_mode: Denormalization mode used (AUTO/AGGRESSIVE/CONSERVATIVE).
     """
     # Build entity info dicts with computed stats
-    entity_infos = _build_entity_infos(output)
+    entity_infos = build_entity_infos(output)
 
     # Layout entities using graph-aware placement (most connected in center)
     positions = _compute_layout(entity_infos, output.physical_relationships)
@@ -149,74 +149,8 @@ def emit_diagram(
 # --- Data preparation ---
 
 
-def _build_entity_infos(output: PhysicalModel) -> dict:
-    """Build a dict of entity name -> info for rendering."""
-    infos = {}
-    for entity in output.physical_entities:
-        attrs = output.get_attributes_for_entity(entity.physical_entity_name)
 
-        # Count native vs absorbed
-        source_counts: Counter = Counter()
-        for a in attrs:
-            source_counts[a.source_entity] += 1
-
-        native_count = source_counts.get(entity.physical_entity_name, 0)
-        # Also count attrs where source_entity is empty as native
-        native_count += source_counts.get("", 0)
-        absorbed_count = len(attrs) - native_count
-
-        # Absorbed-from breakdown: {source_entity: count} excluding self
-        absorbed_from = {
-            src: cnt for src, cnt in source_counts.items()
-            if src and src != entity.physical_entity_name
-        }
-
-        # Join columns: gather from relationships
-        join_cols = set()
-        for rel in output.physical_relationships:
-            if rel.parent_physical_entity == entity.physical_entity_name:
-                join_cols.update(rel.join_columns)
-            if rel.child_physical_entity == entity.physical_entity_name:
-                join_cols.update(rel.join_columns)
-
-        # Sort columns
-        sort_cols = [
-            f"{sc.column_name} {sc.order.value}" for sc in entity.sort_columns
-        ]
-
-        # Estimate size display
-        size_display = ""
-        if entity.estimated_size_bytes:
-            size_gb = entity.estimated_size_bytes / (1024 ** 3)
-            size_mb = entity.estimated_size_bytes / (1024 ** 2)
-            if size_gb >= 1:
-                size_display = f"{size_gb:.1f} GB"
-            else:
-                size_display = f"{size_mb:.0f} MB"
-
-        # Row count display
-        row_display = ""
-        if entity.estimated_row_count:
-            if entity.estimated_row_count >= 1_000_000:
-                row_display = f"{entity.estimated_row_count / 1_000_000:.1f}M rows"
-            elif entity.estimated_row_count >= 1_000:
-                row_display = f"{entity.estimated_row_count / 1_000:.0f}K rows"
-            else:
-                row_display = f"{entity.estimated_row_count} rows"
-
-        infos[entity.physical_entity_name] = {
-            "entity": entity,
-            "total_attrs": len(attrs),
-            "native_count": native_count,
-            "absorbed_count": absorbed_count,
-            "absorbed_from": absorbed_from,
-            "join_columns": sorted(join_cols),
-            "sort_columns": sort_cols,
-            "size_display": size_display,
-            "row_display": row_display,
-        }
-
-    return infos
+# _build_entity_infos moved to emitters/diagram_common.py
 
 
 # --- Layout ---

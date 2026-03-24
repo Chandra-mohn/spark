@@ -30,6 +30,13 @@ from spark_pdm_generator.parsers.column_mapper import (
     SheetMapping,
     create_default_mapping,
 )
+from spark_pdm_generator.parsers.utils import (
+    build_config_from_dict as _build_config_from_dict,
+    parse_enum as _parse_enum,
+    parse_float as _parse_float,
+    parse_int as _parse_int,
+    parse_string_list as _parse_string_list,
+)
 
 
 class ParseError(Exception):
@@ -62,6 +69,10 @@ class ExcelParser:
 
         try:
             entities = self._parse_entities(wb)
+            # Build canonical name map for cross-sheet normalization
+            self._entity_name_map: dict[str, str] = {
+                e.entity_name.lower(): e.entity_name for e in entities
+            }
             attributes = self._parse_attributes(wb)
             relationships = self._parse_relationships(wb)
             distributions = self._parse_data_distribution(wb)
@@ -70,6 +81,25 @@ class ExcelParser:
             config = self._parse_config(wb)
         finally:
             wb.close()
+
+        # Warn on duplicate entity names
+        seen_entities: set[str] = set()
+        for e in entities:
+            if e.entity_name in seen_entities:
+                self.warnings.append(
+                    f"Duplicate entity name: '{e.entity_name}'"
+                )
+            seen_entities.add(e.entity_name)
+
+        # Warn on duplicate (entity, attribute) pairs
+        seen_attrs: set[tuple[str, str]] = set()
+        for a in attributes:
+            key = (a.entity_name, a.attribute_name)
+            if key in seen_attrs:
+                self.warnings.append(
+                    f"Duplicate attribute: '{a.entity_name}.{a.attribute_name}'"
+                )
+            seen_attrs.add(key)
 
         if self.errors:
             raise ParseError(
@@ -178,11 +208,17 @@ class ExcelParser:
         )
 
     def _parse_attributes(self, wb: openpyxl.Workbook) -> list[Attribute]:
-        return self._parse_sheet(
+        attrs = self._parse_sheet(
             wb, "attributes", required=True, use_mapping=True,
             required_fields=("entity_name", "attribute_name", "logical_data_type"),
             builder_fn=self._build_attribute,
         )
+        # Normalize entity names to match canonical names from Entities sheet
+        for attr in attrs:
+            canonical = self._entity_name_map.get(attr.entity_name.lower())
+            if canonical and canonical != attr.entity_name:
+                attr.entity_name = canonical
+        return attrs
 
     @staticmethod
     def _build_attribute(row: dict[str, Any], i: int) -> Attribute:
@@ -207,7 +243,7 @@ class ExcelParser:
         )
 
     def _parse_relationships(self, wb: openpyxl.Workbook) -> list[Relationship]:
-        return self._parse_sheet(
+        rels = self._parse_sheet(
             wb, "relationships", required=True, use_mapping=True,
             required_fields=(
                 "parent_entity", "child_entity", "cardinality",
@@ -215,6 +251,15 @@ class ExcelParser:
             ),
             builder_fn=self._build_relationship,
         )
+        # Normalize entity names to match canonical names from Entities sheet
+        for rel in rels:
+            canonical_parent = self._entity_name_map.get(rel.parent_entity.lower())
+            canonical_child = self._entity_name_map.get(rel.child_entity.lower())
+            if canonical_parent and canonical_parent != rel.parent_entity:
+                rel.parent_entity = canonical_parent
+            if canonical_child and canonical_child != rel.child_entity:
+                rel.child_entity = canonical_child
+        return rels
 
     @staticmethod
     def _build_relationship(row: dict[str, Any], i: int) -> Relationship:
@@ -235,7 +280,7 @@ class ExcelParser:
     def _parse_data_distribution(
         self, wb: openpyxl.Workbook
     ) -> list[DataDistribution]:
-        return self._parse_sheet(
+        dists = self._parse_sheet(
             wb, "data_distribution", required=False, use_mapping=False,
             required_fields=("entity_name", "attribute_name"),
             builder_fn=self._build_distribution,
@@ -244,6 +289,12 @@ class ExcelParser:
                 "Tool will use heuristics instead of data-driven decisions."
             ),
         )
+        # Normalize entity names
+        for d in dists:
+            canonical = self._entity_name_map.get(d.entity_name.lower())
+            if canonical and canonical != d.entity_name:
+                d.entity_name = canonical
+        return dists
 
     @staticmethod
     def _build_distribution(row: dict[str, Any], i: int) -> DataDistribution:
@@ -398,38 +449,6 @@ class ExcelParser:
 # --- Helper Functions ---
 
 
-def _parse_enum(value: Any, enum_class: type, default: Any) -> Any:
-    """Parse a value into an enum, falling back to default."""
-    if value is None:
-        return default
-    str_val = str(value).strip().upper()
-    try:
-        return enum_class(str_val)
-    except ValueError:
-        for member in enum_class:
-            if member.name == str_val or member.value == str_val:
-                return member
-        return default
-
-
-def _parse_int(value: Any) -> Optional[int]:
-    """Parse a value to int, returning None if not possible."""
-    if value is None:
-        return None
-    try:
-        return int(float(str(value)))
-    except (ValueError, TypeError):
-        return None
-
-
-def _parse_float(value: Any, default: Optional[float]) -> Optional[float]:
-    """Parse a value to float."""
-    if value is None:
-        return default
-    try:
-        return float(str(value))
-    except (ValueError, TypeError):
-        return default
 
 
 def _parse_bool(value: Any, default: bool) -> bool:
@@ -452,22 +471,18 @@ def _parse_optional_str(value: Any) -> Optional[str]:
     return s if s else None
 
 
-def _parse_string_list(value: str) -> list[str]:
-    """Parse a comma-separated string into a list of trimmed strings."""
-    if not value or value.strip() == "":
-        return []
-    return [s.strip() for s in value.split(",") if s.strip()]
 
 
 def _parse_type_precision(data_type: str) -> tuple[Optional[int], Optional[int]]:
     """Extract precision and scale from a type string like 'DECIMAL(15,2)'.
 
+    Handles whitespace variants: 'DECIMAL( 15 , 2 )', 'DECIMAL(15,2)', etc.
     Returns (precision, scale) or (None, None).
     """
-    match = re.match(r".*\((\d+)\s*,\s*(\d+)\)", data_type)
+    match = re.match(r".*\(\s*(\d+)\s*,\s*(\d+)\s*\)", data_type)
     if match:
         return int(match.group(1)), int(match.group(2))
-    match = re.match(r".*\((\d+)\)", data_type)
+    match = re.match(r".*\(\s*(\d+)\s*\)", data_type)
     if match:
         return int(match.group(1)), None
     return None, None
@@ -483,41 +498,3 @@ def _normalize_data_type(data_type: str) -> str:
     return re.sub(r"\(.*\)", "", data_type).strip().upper()
 
 
-def _build_config_from_dict(d: dict[str, Any]) -> Config:
-    """Build a Config from a key-value dict, applying type coercion."""
-    from spark_pdm_generator.models.logical import (
-        Compression,
-        ModelType,
-        TargetFormat,
-    )
-
-    kwargs: dict[str, Any] = {}
-
-    str_enum_fields = {
-        "model_type": ModelType,
-        "target_format": TargetFormat,
-        "compression": Compression,
-        "denormalization_mode": DenormalizationMode,
-    }
-    int_fields = [
-        "cluster_parallelism",
-        "target_file_size_mb",
-        "column_threshold_for_vertical_split",
-        "small_dim_row_threshold",
-        "dictionary_encoding_cardinality_threshold",
-        "max_partition_cardinality",
-        "row_group_size_mb",
-        "default_bucket_count",
-    ]
-
-    for key, enum_class in str_enum_fields.items():
-        if key in d:
-            kwargs[key] = _parse_enum(d[key], enum_class, None)
-
-    for key in int_fields:
-        if key in d:
-            val = _parse_int(d[key])
-            if val is not None:
-                kwargs[key] = val
-
-    return Config(**{k: v for k, v in kwargs.items() if v is not None})

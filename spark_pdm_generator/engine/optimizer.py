@@ -4,7 +4,12 @@ import math
 from collections import Counter
 from typing import Optional
 
-from spark_pdm_generator.engine.utils import find_logical_attribute, is_date_like, is_id_like
+from spark_pdm_generator.engine.utils import (
+    find_logical_attribute,
+    is_date_like,
+    is_id_like,
+    sanitize_name,
+)
 from spark_pdm_generator.models.logical import Attribute, Config, LogicalModel, TargetFormat
 from spark_pdm_generator.models.physical import (
     JoinCost,
@@ -143,6 +148,17 @@ def apply_type_mapping(model: LogicalModel, output: PhysicalModel) -> None:
         # Find the source logical attribute
         logical_attr = find_logical_attribute(model, attr.source_entity, attr.source_attribute)
         if not logical_attr:
+            if attr.source_entity and attr.source_attribute:
+                output.add_warning(
+                    level=WarningLevel.WARNING,
+                    entity=attr.physical_entity_name,
+                    attribute=attr.attribute_name,
+                    message=(
+                        f"Could not find source attribute "
+                        f"'{attr.source_entity}.{attr.source_attribute}' "
+                        f"for type mapping. Column will have no type."
+                    ),
+                )
             continue
 
         # Map type
@@ -162,6 +178,15 @@ def apply_type_mapping(model: LogicalModel, output: PhysicalModel) -> None:
             attr.parquet_type = "BINARY"
             attr.logical_type = "STRING"
             attr.notes = f"Unknown logical type '{logical_attr.logical_data_type}' mapped to STRING"
+            output.add_warning(
+                level=WarningLevel.INFO,
+                entity=attr.physical_entity_name,
+                attribute=attr.attribute_name,
+                message=(
+                    f"Unknown logical type '{logical_attr.logical_data_type}' "
+                    f"mapped to STRING"
+                ),
+            )
 
         # Select encoding
         attr.encoding = _select_encoding(attr, logical_attr, encoding_threshold)
@@ -318,19 +343,11 @@ def _select_bucket_column(
     """Select the best bucket column for an entity."""
     attrs = output.get_attributes_for_entity(phys_entity.physical_entity_name)
 
-    # Find primary key columns that are not partition columns
-    # Check against logical model since physical attributes don't track PK status
-    pk_names = set()
-    for source in phys_entity.source_entities:
-        for la in model.get_primary_keys(source):
-            pk_names.add(la.attribute_name)
-            # Also check prefixed name (absorbed entities get prefixed)
-            pk_names.add(f"{source}_{la.attribute_name}")
-
+    # Use is_primary_key from physical attributes directly
     pk_attrs = [
         a
         for a in attrs
-        if a.attribute_name in pk_names and not a.is_partition_col
+        if a.is_primary_key and not a.is_partition_col
     ]
 
     # Prefer non-date PK columns for bucketing
@@ -365,21 +382,20 @@ def _calculate_bucket_count(
     """
     row_count = phys_entity.estimated_row_count
     if row_count:
-        # Estimate total size using best available data
-        if phys_entity.estimated_size_bytes:
-            total_bytes = phys_entity.estimated_size_bytes
-        else:
-            avg_row_bytes = _estimate_record_length(phys_entity, model)
-            total_bytes = row_count * avg_row_bytes
-            phys_entity.estimated_size_bytes = total_bytes
+        # Always recalculate from record length -- denormalization may have
+        # absorbed extra entities, making any pre-set estimate stale
+        avg_row_bytes = _estimate_record_length(phys_entity, model)
+        total_bytes = row_count * avg_row_bytes
+        phys_entity.estimated_size_bytes = total_bytes
 
         raw_count = math.ceil(total_bytes / target_file_bytes)
         # Round up to nearest power of 2 for even distribution
         count = _next_power_of_2(raw_count)
         # Clamp to reasonable range
         count = max(defaults.MIN_BUCKET_COUNT, min(count, defaults.MAX_BUCKET_COUNT))
-        # Don't exceed cluster parallelism
+        # Don't exceed cluster parallelism, but re-enforce minimum
         count = min(count, config.cluster_parallelism)
+        count = max(defaults.MIN_BUCKET_COUNT, count)
         return count
 
     return config.default_bucket_count

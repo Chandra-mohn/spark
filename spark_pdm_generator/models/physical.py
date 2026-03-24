@@ -3,7 +3,7 @@
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class PhysicalEntityType(str, Enum):
@@ -104,6 +104,7 @@ class PhysicalAttribute(BaseModel):
     logical_type: str = ""
     encoding: ParquetEncoding = ParquetEncoding.PLAIN
     nullable: bool = True
+    is_primary_key: bool = False
     is_partition_col: bool = False
     is_bucket_col: bool = False
     is_sort_col: bool = False
@@ -165,7 +166,7 @@ class PhysicalModel(BaseModel):
     warnings: list[Warning] = Field(default_factory=list)
     spark_config: list[SparkConfigEntry] = Field(default_factory=list)
 
-    _log_counter: int = 0
+    _log_counter: int = PrivateAttr(default=0)
 
     def add_log_entry(
         self,

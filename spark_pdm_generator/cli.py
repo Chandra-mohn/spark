@@ -85,15 +85,20 @@ def generate(
 ) -> None:
     """Generate a Spark/Parquet physical data model from a logical model."""
     # Load column mapping
-    if mapping_file and mapping_file.exists():
-        typer.echo(f"Loading column mapping from: {mapping_file}")
-        mapping = load_column_mapping(mapping_file)
-    else:
-        if mapping_file:
+    if mapping_file:
+        if not mapping_file.exists():
             typer.echo(
-                f"Warning: Mapping file '{mapping_file}' not found. Using defaults.",
+                f"ERROR: Mapping file '{mapping_file}' not found.",
                 err=True,
             )
+            raise typer.Exit(code=1)
+        typer.echo(f"Loading column mapping from: {mapping_file}")
+        try:
+            mapping = load_column_mapping(mapping_file)
+        except (ValueError, Exception) as e:
+            typer.echo(f"ERROR: Failed to load mapping file: {e}", err=True)
+            raise typer.Exit(code=1)
+    else:
         mapping = create_default_mapping()
 
     # Parse input
@@ -135,7 +140,11 @@ def generate(
     # Run pipeline
     typer.echo("\nRunning transformation pipeline...")
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    result = run_pipeline(model, output_file, output_dir)
+    try:
+        result = run_pipeline(model, output_file, output_dir)
+    except Exception as e:
+        typer.echo(f"ERROR: Pipeline failed: {e}", err=True)
+        raise typer.Exit(code=1)
 
     # Report results
     typer.echo(f"\nResults:")
@@ -223,7 +232,11 @@ def generate_lite(
     # Run lite pipeline
     typer.echo("\nRunning lite transformation pipeline...")
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    result = run_lite_pipeline(model, output_file, output_dir)
+    try:
+        result = run_lite_pipeline(model, output_file, output_dir)
+    except Exception as e:
+        typer.echo(f"ERROR: Lite pipeline failed: {e}", err=True)
+        raise typer.Exit(code=1)
 
     # Report results
     typer.echo(f"\nResults:")

@@ -47,20 +47,20 @@ def run_lite_pipeline(
     """Execute the lite transformation pipeline.
 
     Phases:
-    0a. Estimate record lengths (from attribute types/sizes)
-    1.  Build ER graph
-    2.  Classify entities
-    0b. Fill missing row counts (heuristic defaults, post-classification)
-    3.  Denormalize (plan + apply)
-    4.  (Vertical split skipped -- no domain groups)
-    5.  Select partition columns
-    6.  Calculate bucketing
-    7.  Select sort keys
-    8.  Map types and encoding
-    9.  Build physical relationships
-    10. Apply remaining overrides
-    11. Generate Spark config
-    12. Emit outputs (Excel + DDL + ETL)
+    1.  Estimate record lengths (from attribute types/sizes)
+    2.  Build ER graph
+    3.  Classify entities
+    4.  Fill missing row counts (heuristic defaults, post-classification)
+    5.  Denormalize (plan + apply)
+    6.  (Vertical split skipped -- no domain groups in lite input)
+    7.  Select partition columns
+    8.  Calculate bucketing
+    9.  Select sort keys
+    10. Map types and encoding
+    11. Build physical relationships
+    12. Apply remaining overrides
+    13. Generate Spark config
+    14. Emit outputs (Excel + DDL + ETL)
 
     Args:
         model: Parsed logical model from LiteParser.
@@ -76,47 +76,47 @@ def run_lite_pipeline(
     output = PhysicalModel()
     overrides = OverrideRegistry(model.rule_overrides)
 
-    # Phase 0a: Estimate record lengths before anything else
+    # Phase 1: Estimate record lengths before anything else
     estimate_record_lengths(model, output)
 
-    # Phase 1: Build ER graph
+    # Phase 2: Build ER graph
     graph = ERGraph.from_logical_model(model)
 
-    # Phase 2: Classify entities
+    # Phase 3: Classify entities
     classify_entities(model, graph, output)
     validate_classifications(model, graph, output)
 
-    # Phase 0b: Fill missing row counts (needs entity types from classification)
+    # Phase 4: Fill missing row counts (needs entity types from classification)
     fill_missing_row_counts(model, output)
 
-    # Phase 3: Denormalize
+    # Phase 5: Denormalize
     plan = build_denormalization_plan(model, graph, output, overrides)
     apply_denormalization(model, graph, plan, output)
 
-    # Phase 4: Vertical split -- SKIPPED (no domain groups in lite input)
+    # Phase 6: Vertical split -- SKIPPED (no domain groups in lite input)
 
-    # Phase 5: Select partition columns
+    # Phase 7: Select partition columns
     select_partition_columns(model, output, overrides)
 
-    # Phase 6: Calculate bucketing
+    # Phase 8: Calculate bucketing
     calculate_bucketing(model, output, overrides)
 
-    # Phase 7: Select sort keys
+    # Phase 9: Select sort keys
     select_sort_keys(model, output)
 
-    # Phase 8: Map types and encoding
+    # Phase 10: Map types and encoding
     apply_type_mapping(model, output)
 
-    # Phase 9: Build physical relationships
+    # Phase 11: Build physical relationships
     build_physical_relationships(model, output)
 
-    # Phase 10: Apply remaining overrides
+    # Phase 12: Apply remaining overrides
     apply_remaining_overrides(output, overrides)
 
-    # Phase 11: Generate Spark config
+    # Phase 13: Generate Spark config
     generate_spark_config(model, output)
 
-    # Phase 12: Emit outputs
+    # Phase 14: Emit outputs
     output_dir.mkdir(parents=True, exist_ok=True)
     emit_excel(output, output_excel_path)
 

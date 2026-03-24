@@ -1,5 +1,7 @@
 """Denormalizer: merges 1:1 relationships, embeds small dimensions, flattens hierarchies."""
 
+import networkx as nx
+
 from spark_pdm_generator.models.graph import ERGraph
 from spark_pdm_generator.models.logical import (
     Attribute,
@@ -14,7 +16,9 @@ from spark_pdm_generator.models.physical import (
     PhysicalEntityType,
     PhysicalModel,
     TransformationRule,
+    WarningLevel,
 )
+from spark_pdm_generator.engine.utils import sanitize_name as _sanitize_name
 from spark_pdm_generator.rules import defaults
 
 
@@ -79,7 +83,25 @@ def build_denormalization_plan(
     threshold = config.small_dim_row_threshold
     plan = DenormalizationPlan()
 
+    # Validate graph has no cycles before denormalization
+    cyclic_entities: set[str] = set()
+    if not nx.is_directed_acyclic_graph(graph._graph):
+        cycles = list(nx.simple_cycles(graph._graph))
+        for cycle in cycles:
+            cyclic_entities.update(cycle)
+        cycle_str = "; ".join(" -> ".join(c) for c in cycles[:3])
+        output.add_warning(
+            level=WarningLevel.WARNING,
+            message=(
+                f"ER graph contains cycles: {cycle_str}. "
+                f"Entities in cycles will be excluded from denormalization."
+            ),
+            recommendation="Remove circular relationships or mark them as non-identifying.",
+        )
+
     blocked_denorm = overrides.blocked_denorm if overrides else set()
+    # Entities in cycles are treated as blocked to prevent infinite loops
+    blocked_denorm = blocked_denorm | cyclic_entities
 
     # Phase 1: Merge 1:1 relationships
     for entity in model.entities:
@@ -423,11 +445,14 @@ def apply_denormalization(
             if absorbed_name == entity.entity_name:
                 continue
             absorbed_attrs = model.get_attributes_for_entity(absorbed_name)
+            # Find relationship in either direction (parent->child or child->parent)
             rel = graph.get_relationship(absorbed_name, entity.entity_name)
+            if not rel:
+                rel = graph.get_relationship(entity.entity_name, absorbed_name)
             # Skip FK columns that duplicate the join key
-            fk_cols = set()
+            fk_cols: set[str] = set()
             if rel:
-                fk_cols = set(rel.child_key_columns)
+                fk_cols = set(rel.child_key_columns) | set(rel.parent_key_columns)
 
             for attr in absorbed_attrs:
                 if attr.is_primary_key and attr.attribute_name in fk_cols:
@@ -459,17 +484,6 @@ def _make_physical_name(entity: Entity) -> str:
             return f"{defaults.DIMENSION_PREFIX}{name}"
     return name
 
-
-def _sanitize_name(name: str) -> str:
-    """Sanitize a name for use as a SQL identifier.
-
-    Replaces spaces and hyphens with underscores, collapses multiple
-    underscores, and strips leading/trailing underscores.
-    """
-    import re
-    name = re.sub(r"[\s\-]+", "_", name)
-    name = re.sub(r"_+", "_", name)
-    return name.strip("_")
 
 
 def _map_entity_type(entity_type: EntityType) -> PhysicalEntityType:
@@ -508,6 +522,7 @@ def _add_physical_attribute(
         source_entity=source_entity,
         source_attribute=attr.attribute_name,
         nullable=attr.nullable,
+        is_primary_key=attr.is_primary_key,
         estimated_cardinality=cardinality,
         estimated_null_pct=null_pct,
     )

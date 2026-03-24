@@ -9,6 +9,13 @@ from spark_pdm_generator.models.physical import (
 )
 
 
+def _q(name: str) -> str:
+    """Quote a SQL identifier with backticks if it contains special chars."""
+    if " " in name or "-" in name or "." in name:
+        return f"`{name}`"
+    return name
+
+
 class DDLBuilder:
     """Builds Spark SQL DDL statements using f-strings."""
 
@@ -18,7 +25,7 @@ class DDLBuilder:
         attributes: list[PhysicalAttribute],
     ) -> str:
         """Generate a CREATE TABLE statement for Parquet format."""
-        table_name = entity.physical_entity_name
+        table_name = _q(entity.physical_entity_name)
 
         # Separate partition columns from regular columns
         partition_cols = set(entity.partition_columns)
@@ -30,7 +37,7 @@ class DDLBuilder:
         for attr in regular_attrs:
             spark_type = _to_spark_sql_type(attr)
             null_str = "" if attr.nullable else " NOT NULL"
-            col_defs.append(f"    {attr.attribute_name} {spark_type}{null_str}")
+            col_defs.append(f"    {_q(attr.attribute_name)} {spark_type}{null_str}")
 
         columns_sql = ",\n".join(col_defs)
 
@@ -45,7 +52,7 @@ class DDLBuilder:
             part_defs = []
             for pa in partition_attrs:
                 spark_type = _to_spark_sql_type(pa)
-                part_defs.append(f"{pa.attribute_name} {spark_type}")
+                part_defs.append(f"{_q(pa.attribute_name)} {spark_type}")
             ddl += f"\nPARTITIONED BY ({', '.join(part_defs)})"
 
         # Clustering (bucketing + sorting)
@@ -53,11 +60,11 @@ class DDLBuilder:
             sort_clause = ""
             if entity.sort_columns:
                 sort_cols = ", ".join(
-                    sc.column_name for sc in entity.sort_columns
+                    _q(sc.column_name) for sc in entity.sort_columns
                 )
                 sort_clause = f"\nSORTED BY ({sort_cols})"
             ddl += (
-                f"\nCLUSTERED BY ({entity.bucket_column}) "
+                f"\nCLUSTERED BY ({_q(entity.bucket_column)}) "
                 f"{sort_clause}"
                 f"\nINTO {entity.bucket_count} BUCKETS"
             )
@@ -78,14 +85,14 @@ class DDLBuilder:
         attributes: list[PhysicalAttribute],
     ) -> str:
         """Generate a CREATE TABLE statement for Iceberg format."""
-        table_name = entity.physical_entity_name
+        table_name = _q(entity.physical_entity_name)
 
         # All columns including partition columns
         col_defs = []
         for attr in attributes:
             spark_type = _to_spark_sql_type(attr)
             null_str = "" if attr.nullable else " NOT NULL"
-            col_defs.append(f"    {attr.attribute_name} {spark_type}{null_str}")
+            col_defs.append(f"    {_q(attr.attribute_name)} {spark_type}{null_str}")
 
         columns_sql = ",\n".join(col_defs)
 
@@ -163,6 +170,9 @@ def _to_spark_sql_type(attr: PhysicalAttribute) -> str:
     logical = attr.logical_type.upper()
 
     if logical.startswith("DECIMAL"):
+        # Ensure bare DECIMAL gets default precision/scale
+        if logical == "DECIMAL":
+            return "DECIMAL(18,2)"
         return logical
     if logical == "STRING":
         return "STRING"

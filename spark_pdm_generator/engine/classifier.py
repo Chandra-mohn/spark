@@ -10,6 +10,7 @@ from spark_pdm_generator.models.physical import (
     TransformationRule,
     WarningLevel,
 )
+from spark_pdm_generator.rules import defaults
 
 
 def classify_entities(
@@ -70,19 +71,24 @@ def _infer_entity_type(
             return EntityType.BRIDGE
 
     # Reference: very small, only referenced by others, few attributes
-    if row_count is not None and row_count < 1000 and out_deg == 0 and attr_count < 20:
+    if (
+        row_count is not None
+        and row_count < defaults.REFERENCE_MAX_ROW_COUNT
+        and out_deg == 0
+        and attr_count < defaults.REFERENCE_MAX_ATTR_COUNT
+    ):
         return EntityType.REFERENCE
 
     # Fact: many FK parents (in_degree high), wide, large row count
-    if in_deg >= 2 and attr_count > 20:
+    if in_deg >= defaults.FACT_MIN_IN_DEGREE and attr_count > defaults.FACT_MIN_ATTR_COUNT:
         return EntityType.FACT
 
     # Fact: very large row count
-    if row_count is not None and row_count > 10_000_000:
+    if row_count is not None and row_count > defaults.FACT_MIN_ROW_COUNT:
         return EntityType.FACT
 
     # Dimension: referenced by others (has children), moderate size
-    if out_deg > 0 and in_deg <= 2:
+    if out_deg > 0 and in_deg <= defaults.DIMENSION_MAX_IN_DEGREE:
         return EntityType.DIMENSION
 
     # Default
